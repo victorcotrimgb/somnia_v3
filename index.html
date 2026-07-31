@@ -44,6 +44,70 @@ body{background:radial-gradient(circle at 20% 0%,rgba(155,101,69,.18),transparen
 .quick-dose-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.quick-dose-grid button{padding:10px 6px;border-radius:12px;border:1px solid rgba(220,190,160,.14);background:rgba(255,255,255,.045);color:inherit}
 .validation-warning{padding:12px;border-radius:14px;background:rgba(210,163,94,.12);border:1px solid rgba(210,163,94,.30);margin:10px 0}
 
+
+/* Somnia v9.1 — correções de navegação e hierarquia visual */
+body{padding-bottom:112px!important}
+.tabs{
+  grid-template-columns:repeat(6,minmax(0,1fr))!important;
+  gap:3px!important;
+  width:min(760px,calc(100% - 16px))!important;
+  padding:7px!important;
+  bottom:8px!important;
+  overflow:hidden!important;
+}
+.tab{
+  min-width:0!important;
+  padding:8px 2px!important;
+  font-size:10px!important;
+  line-height:1.15!important;
+}
+.tab span{font-size:19px!important;margin-bottom:3px!important}
+.tab.active{background:linear-gradient(145deg,rgba(155,101,69,.25),rgba(79,125,184,.25))!important}
+
+#page-today .section{margin-bottom:14px!important}
+#page-today .kpi-grid{gap:9px!important}
+#page-today .kpi{min-height:104px;display:flex;flex-direction:column;justify-content:center}
+#page-today .kpi small{color:var(--muted);font-size:13px}
+#page-today .kpi strong{font-size:27px}
+#todayAdvice,#lastSleepSummary,#plannerResult{min-height:0!important}
+#todayTimeline:empty:after{content:"Nenhum evento neste ciclo.";color:var(--muted)}
+#page-today .coffee-night-accent{margin-top:0}
+
+#historyList .item{
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr) auto!important;
+  align-items:start!important;
+  gap:12px!important;
+  padding:16px!important;
+}
+#historyList .item>div:first-child{min-width:0!important}
+#historyList .item small{display:block!important;line-height:1.45!important;padding-right:0!important}
+#historyList .item .btn{
+  display:block!important;
+  width:max-content!important;
+  max-width:100%!important;
+  margin-top:10px!important;
+  padding:9px 12px!important;
+  font-size:13px!important;
+  white-space:normal!important;
+}
+#historyList .pill{align-self:start!important;white-space:nowrap!important}
+
+.item{gap:10px}
+.item .actions{flex-wrap:wrap}
+.btn{max-width:100%}
+.section{overflow:hidden}
+.insight{overflow-wrap:anywhere}
+
+@media(max-width:430px){
+  .tabs{width:calc(100% - 10px)!important;padding:6px 4px!important}
+  .tab{font-size:9px!important}
+  .tab span{font-size:18px!important}
+  #historyList .item{grid-template-columns:1fr!important}
+  #historyList .pill{justify-self:start!important}
+  .quick-dose-grid{grid-template-columns:repeat(2,1fr)!important}
+}
+
 </style>
   <link rel="apple-touch-icon" href="icon-192.png">
 </head>
@@ -220,8 +284,79 @@ let __favoritePending=null;
 function showUndo(message,undoFn){let el=document.getElementById('undoToast');if(!el){el=document.createElement('div');el.id='undoToast';el.className='undo-toast';el.innerHTML='<span id="undoText"></span><button id="undoBtn">Desfazer</button>';document.body.appendChild(el)}undoText.textContent=message;undoBtn.onclick=()=>{undoFn();el.style.display='none'};el.style.display='flex';clearTimeout(el._timer);el._timer=setTimeout(()=>el.style.display='none',7000)}
 function caffeineAt(ts,extra=[]){const t=new Date(ts);return [...(data.caffeine||[]),...extra].reduce((a,c)=>{let d=new Date(c.ts);if(d>t)return a;return a+(+c.mg||0)*Math.pow(.5,(t-d)/3600000/(data.settings.halfLife||5))},0)}
 function nextBedDate(from=new Date()){let [h,m]=(data.settings.bedtime||'23:30').split(':').map(Number),d=new Date(from);d.setHours(h,m,0,0);if(d<=from)d.setDate(d.getDate()+1);return d}
-function renderTodayDashboard(){if(!document.getElementById('todayConsumed'))return;let now=new Date(),mains=(data.sleep||[]).filter(s=>s.type==='principal'&&new Date(s.end)<=now).sort((a,b)=>new Date(b.end)-new Date(a.end)),start=mains[0]?new Date(mains[0].end):new Date(now-86400000),cycle=(data.caffeine||[]).filter(c=>new Date(c.ts)>start&&new Date(c.ts)<=now),cons=cycle.reduce((a,c)=>a+(+c.mg||0),0),bed=nextBedDate(now),nm=caffeineAt(now),bm=caffeineAt(bed),target=+(data.settings.targetBedMg||25);todayConsumed.textContent=cons.toFixed(0)+' mg';todayNow.textContent=nm.toFixed(0)+' mg';todayBed.textContent=bm.toFixed(0)+' mg';todayMargin.textContent=(target-bm).toFixed(0)+' mg';todayAdvice.textContent=bm<=target?'Previsão dentro da meta configurada.':'Previsão acima da meta em '+(bm-target).toFixed(0)+' mg.';lastSleepSummary.textContent=mains[0]?new Date(mains[0].start).toLocaleString('pt-BR')+' → '+new Date(mains[0].end).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+' · nota '+(mains[0].score??'—')+'/100':'Nenhum sono principal registrado.';todayTimeline.innerHTML=(mains[0]?`<div class="timeline-event"><strong>${new Date(mains[0].end).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</strong><small>Acordou</small></div>`:'')+cycle.map(c=>`<div class="timeline-event coffee"><strong>${new Date(c.ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</strong><small>${c.name||'Cafeína'} · ${(+c.mg).toFixed(0)} mg</small></div>`).join('')}
-function runCaffeinePlanner(){let mg=+plannerMg.value||0,[h,m]=(plannerTime.value||currentTimeStr()).split(':').map(Number),ts=new Date();ts.setHours(h,m,0,0);if(ts<new Date())ts.setDate(ts.getDate()+1);let bed=nextBedDate(ts),before=caffeineAt(bed),after=caffeineAt(bed,[{mg,ts:ts.toISOString()}]);plannerResult.textContent=`Previsão ao deitar: ${before.toFixed(0)} → ${after.toFixed(0)} mg. ${after>(data.settings.targetBedMg||25)?'Acima da meta.':'Dentro da meta.'}`}
+
+function renderTodayOverview(){
+  const consumedEl=document.getElementById('todayConsumed');
+  if(!consumedEl)return;
+
+  const now=new Date();
+  const todayEntries=(data.caffeine||[]).filter(x=>localDateStr(new Date(x.ts))===todayStr());
+  const awakeEntries=currentAwakeEntries();
+  const consumed=todayEntries.reduce((sum,x)=>sum+Number(x.mg||0),0);
+  const nowMg=caffeineRemainingAt(now);
+  const bedtime=plannedBedtimeDate();
+  const bedMg=caffeineRemainingAt(bedtime,awakeEntries);
+  const target=Number(data.settings.targetBedMg||25);
+  const margin=target-bedMg;
+
+  document.getElementById('todayConsumed').textContent=`${consumed.toFixed(0)} mg`;
+  document.getElementById('todayNow').textContent=`${nowMg.toFixed(0)} mg`;
+  document.getElementById('todayBed').textContent=`${bedMg.toFixed(0)} mg`;
+  document.getElementById('todayMargin').textContent=
+    margin>=0?`${margin.toFixed(0)} mg`:`−${Math.abs(margin).toFixed(0)} mg`;
+
+  const advice=document.getElementById('todayAdvice');
+  advice.textContent=bedMg<=target
+    ?`A previsão para ${data.settings.bedtime} está dentro da meta de ${target} mg.`
+    :`A previsão para ${data.settings.bedtime} está ${Math.abs(margin).toFixed(0)} mg acima da meta.`;
+
+  const mains=[...(data.sleep||[])]
+    .filter(s=>s.type==='principal')
+    .sort((a,b)=>new Date(b.start)-new Date(a.start));
+  const last=mains[0];
+  document.getElementById('lastSleepSummary').textContent=last
+    ?`${fmtDate(last.start)} · ${fmtTime(last.start)}–${fmtTime(last.end)} · ${((new Date(last.end)-new Date(last.start))/36e5).toFixed(1)} h · nota ${last.score??'—'}/100`
+    :'Nenhum sono principal registrado.';
+
+  const timeline=document.getElementById('todayTimeline');
+  const lastWake=mains.find(s=>new Date(s.end)<=now);
+  const cycleStart=lastWake?new Date(lastWake.end):new Date(now.getTime()-24*36e5);
+  const cycle=(data.caffeine||[])
+    .filter(c=>new Date(c.ts)>cycleStart&&new Date(c.ts)<=now)
+    .sort((a,b)=>new Date(a.ts)-new Date(b.ts));
+
+  let events=[];
+  if(lastWake){
+    events.push(`<div class="timeline-event"><strong>${fmtTime(lastWake.end)}</strong><small>Acordou</small></div>`);
+  }
+  events.push(...cycle.map(c=>
+    `<div class="timeline-event coffee"><strong>${fmtTime(c.ts)}</strong><small>${c.name||'Cafeína'} · ${Number(c.mg||0).toFixed(0)} mg${c.consumedAmount?` · ${c.consumedAmount} ${c.consumedUnit||''}`:''}</small></div>`
+  ));
+  events.push(`<div class="timeline-event"><strong>${data.settings.bedtime}</strong><small>Previsão ao dormir · ${bedMg.toFixed(0)} mg</small></div>`);
+  timeline.innerHTML=events.join('');
+}
+
+function runCaffeinePlanner(){
+  const mg=Number(document.getElementById('plannerMg').value||0);
+  const time=document.getElementById('plannerTime').value||currentTimeStr();
+  const [h,m]=time.split(':').map(Number);
+  const doseDate=new Date();
+  doseDate.setHours(h,m,0,0);
+  if(doseDate<new Date())doseDate.setDate(doseDate.getDate()+1);
+
+  const bedtime=plannedBedtimeDate(doseDate);
+  const before=caffeineRemainingAt(bedtime);
+  const hours=Math.max(0,(bedtime-doseDate)/36e5);
+  const residual=mg*Math.pow(.5,hours/Number(data.settings.halfLife||5));
+  const after=before+residual;
+  const target=Number(data.settings.targetBedMg||25);
+
+  document.getElementById('plannerResult').textContent=
+    `Previsão ao dormir: ${before.toFixed(0)} → ${after.toFixed(0)} mg. `+
+    (after>target
+      ?`Ficaria ${(after-target).toFixed(0)} mg acima da meta.`
+      :`Continuaria dentro da meta de ${target} mg.`);
+}
 function validateSleepData(){if(!window.sleepValidation)return[];let actual=+sleepActualMin.value||0,deep=+sleepDeepMin.value||0,rem=+sleepRemMin.value||0,snore=+sleepSnoreMin.value||0,msg=[];if(actual&&deep+rem>actual)msg.push('Profundo + REM maior que sono real.');if(actual&&snore>actual)msg.push('Ronco maior que sono real.');sleepValidation.style.display=msg.length?'block':'none';sleepValidation.innerHTML=msg.length?'⚠️ '+msg.join('<br>'):'';return msg}
 function periodStats(ns){return{n:ns.length,caf:safeMean(ns.map(n=>n.atBed)),score:safeMean(ns.map(n=>+n.sleep.score)),dur:safeMean(ns.map(n=>n.duration)),lat:safeMean(ns.map(n=>+n.sleep.latencyMin).filter(Number.isFinite)),eff:safeMean(ns.map(n=>n.efficiency).filter(Number.isFinite)),snore:safeMean(ns.map(n=>+n.sleep.snoreMin).filter(Number.isFinite))}}
 function renderPeriodComparison(){if(!window.periodComparison)return;let d=+compareDays.value||14,ns=nightDataset().sort((a,b)=>new Date(b.sleep.start)-new Date(a.sleep.start)),a=periodStats(ns.slice(0,d)),b=periodStats(ns.slice(d,d*2)),card=(t,s)=>`<div class="kpi"><strong style="font-size:16px">${t}</strong><small>n=${s.n}</small><p>Cafeína: ${s.caf?.toFixed(0)??'—'} mg<br>Nota: ${s.score?.toFixed(0)??'—'}<br>Duração: ${s.dur?.toFixed(1)??'—'} h<br>Latência: ${s.lat?.toFixed(0)??'—'} min<br>Eficiência: ${s.eff?.toFixed(0)??'—'}%<br>Ronco: ${s.snore?.toFixed(0)??'—'} min</p></div>`;periodComparison.innerHTML=card('Atual',a)+card('Anterior',b)}
@@ -285,7 +420,7 @@ function renderReminderState(){const on=!!data.settings.smartReminders;reminderT
 function notifySmart(title,body,key){if(!data.settings.smartReminders||data.settings.lastReminderKey===key)return;data.settings.lastReminderKey=key;localStorage.setItem(KEY,JSON.stringify(data));showToast(`☕ ${body}`);if('Notification' in window&&Notification.permission==='granted'){try{new Notification(title,{body,icon:'icon-192.png'})}catch{}}}
 function checkSmartReminder(){if(!data.settings.smartReminders)return;const now=new Date(),cut=personalCutoff(90),day=todayStr();if(cut.hour!==null){let h=now.getHours()+now.getMinutes()/60;if(h>=cut.hour&&h<cut.hour+0.08)notifySmart('Somnia · cutoff de cafeína',`Você chegou ao seu cutoff pessoal estimado (${clockFromHour(cut.hour)}).`,`cutoff-${day}`)}let pred=caffeineRemainingAt(plannedBedtimeDate(),currentAwakeEntries());if(pred>data.settings.targetBedMg*1.5)notifySmart('Somnia · cafeína ao deitar',`Previsão de ${pred.toFixed(0)} mg ao dormir, acima da sua meta de ${data.settings.targetBedMg} mg.`,`bedmg-${day}-${Math.round(pred/10)}`)}
 
-function go(id,btn){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById('page-'+id).classList.add('active');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));btn.classList.add('active');if(id==='caffeine'){cafDate.value=todayStr();cafTime.value=currentTimeStr();if(!cafQty.value)syncCafPreview(true);}if(id==='analysis')renderAnalysis()}
+function go(id,btn){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById('page-'+id).classList.add('active');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));btn.classList.add('active');if(id==='caffeine'){cafDate.value=todayStr();cafTime.value=currentTimeStr();if(!cafQty.value)syncCafPreview(true);}if(id==='analysis')renderAnalysis();if(id==='today')renderTodayOverview()}
 function parsePortionText(v){v=String(v||'').trim();let m=v.match(/^\s*([0-9]+(?:[.,][0-9]+)?)\s*(.*)$/);if(!m)return{amount:1,unit:v||'porção'};let amount=parseFloat(m[1].replace(',','.'));return{amount:Number.isFinite(amount)&&amount>0?amount:1,unit:(m[2]||'porção').trim()}}
 function caffeineDoseLabel(x){if(Number.isFinite(+x.consumedAmount)&&x.consumedUnit)return `${(+x.consumedAmount).toLocaleString('pt-BR')} ${x.consumedUnit}`;return `${x.qty} porção(ões)`}
 function syncCafPreview(resetAmount=false){let f=data.foods.find(x=>x.id===document.getElementById('cafItem').value);if(!f)return;let p=parsePortionText(f.portion);if(resetAmount||!document.getElementById('cafQty').value)document.getElementById('cafQty').value=p.amount;let amount=parseFloat(String(document.getElementById('cafQty').value).replace(',','.'))||0,factor=p.amount>0?amount/p.amount:amount;document.getElementById('cafUnitPreview').value=p.unit;document.getElementById('cafPortionPreview').value=`${p.amount.toLocaleString('pt-BR')} ${p.unit} = ${Number(f.mg).toLocaleString('pt-BR',{maximumFractionDigits:1})} mg`;document.getElementById('cafMgPreview').value=(f.mg*factor).toFixed(1)+' mg'}
@@ -336,14 +471,14 @@ function restoreTrash(trashId){const t=data.trash.find(x=>x.trashId===trashId);i
 function purgeTrash(trashId){if(!confirm('Excluir definitivamente este item da lixeira?'))return;data.trash=data.trash.filter(x=>x.trashId!==trashId);persist({reason:'item excluído definitivamente',allowDeletion:true})}
 function renderTrash(){const el=document.getElementById('trashList');if(!el)return;const arr=[...data.trash].sort((a,b)=>new Date(b.deletedAt)-new Date(a.deletedAt));el.innerHTML=arr.length?arr.map(t=>{let label=t.type==='caffeine'?`${t.record.name||'Cafeína'} · ${Number(t.record.mg||0).toFixed(0)} mg`:t.type==='sleep'?`${t.record.type==='cochilo'?'Cochilo':'Sono'} · ${fmtDate(t.record.start)}`:`${t.record.name||'Bebida'}`;return `<div class="item"><div><strong>${label}</strong><small>Excluído em ${fmtDate(t.deletedAt)} ${fmtTime(t.deletedAt)}</small></div><div><button class="btn secondary" onclick="restoreTrash('${t.trashId}')">Restaurar</button> <button class="btn danger" onclick="purgeTrash('${t.trashId}')">Apagar</button></div></div>`}).join(''):'<div class="empty">Lixeira vazia.</div>'} function editCaf(id){let x=data.caffeine.find(v=>v.id===id);if(!x)return;let f=data.foods.find(v=>v.id===x.foodId),p=parsePortionText(f?.portion||`${x.baseAmount||1} ${x.consumedUnit||'porção'}`),current=Number.isFinite(+x.consumedAmount)?+x.consumedAmount:(+x.qty||1)*p.amount;let q=prompt(`Tamanho consumido (${p.unit}):`,current);if(q===null)return;q=parseFloat(String(q).replace(',','.'));let day=prompt('Data (AAAA-MM-DD):',new Date(x.ts).toISOString().slice(0,10));if(day===null)return;let hh=prompt('Horário (HH:MM):',fmtTime(x.ts));if(!q||!/^\d{4}-\d{2}-\d{2}$/.test(day)||!/^\d{2}:\d{2}$/.test(hh))return;let factor=q/p.amount,baseMg=f?f.mg:(x.mg/(x.qty||1));x.qty=factor;x.consumedAmount=q;x.consumedUnit=p.unit;x.baseAmount=p.amount;x.mg=baseMg*factor;x.ts=new Date(day+'T'+hh).toISOString();persist({reason:'cafeína editada'})}
 function saveSettings(){data.settings.halfLife=Math.max(2,Math.min(12,parseFloat(halfLife.value)||5));data.settings.bedtime=bedtime.value||'23:30';data.settings.wakeTime=wakeTime.value||'07:30';data.settings.weekdayMargin=Math.max(0,parseInt(weekdayMargin.value)||30);data.settings.weekendMargin=Math.max(data.settings.weekdayMargin,parseInt(weekendMargin.value)||90);data.settings.targetBedMg=Math.max(0,parseFloat(targetBedMg.value)||25);data.settings.sleepTargetHours=Math.max(4,Math.min(12,parseFloat(sleepTargetHours.value)||8));persist({reason:'configurações alteradas'})}
-function renderAll(){renderTodayDashboard();renderPeriodComparison();renderBackupStatus();
+function renderAll(){renderTodayDashboard();renderTodayOverview();renderPeriodComparison();renderBackupStatus();
  nowBadge.textContent=new Date().toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'short'});
  cafItem.innerHTML=data.foods.map(f=>`<option value="${f.id}">${f.name}</option>`).join(''); syncCafPreview(); halfLife.value=data.settings.halfLife;bedtime.value=data.settings.bedtime;wakeTime.value=data.settings.wakeTime||'07:30';weekdayMargin.value=data.settings.weekdayMargin??30;weekendMargin.value=data.settings.weekendMargin??90;targetBedMg.value=data.settings.targetBedMg;sleepTargetHours.value=data.settings.sleepTargetHours??8;halfLifeLabel.textContent=`Meia-vida: ${data.settings.halfLife} h`;bedtimeBadge.textContent=data.settings.bedtime;let bt=new Date(todayStr()+'T'+data.settings.bedtime);if(bt<new Date())bt.setDate(bt.getDate()+1);let pred=caffeineRemainingAt(bt);bedPrediction.innerHTML=`<strong>${pred.toFixed(0)} mg</strong> estimados às ${data.settings.bedtime}. ${pred<=data.settings.targetBedMg?'Dentro da sua meta configurada.':'Acima da meta de '+data.settings.targetBedMg+' mg; evite novas doses se quiser reduzir a cafeína ao deitar.'}`;favoriteList.innerHTML=data.foods.filter(f=>f.favorite).length?data.foods.filter(f=>f.favorite).map(f=>`<button class="btn secondary fav" onclick="quickAdd('${f.id}',this)"><strong>${f.name}</strong><small>${f.mg} mg · ${f.portion || "1 porção"}</small></button>`).join(''):'<div class="empty" style="grid-column:1/-1">Marque itens com ★ na aba Mais.</div>';
  let today=data.caffeine.filter(x=>localDateStr(new Date(x.ts))===todayStr()); todayTotal.textContent=today.reduce((a,b)=>a+b.mg,0).toFixed(0)+' mg';currentCaf.textContent=caffeineRemainingAt(new Date()).toFixed(0)+' mg';
  todayCafList.innerHTML=today.length?today.sort((a,b)=>new Date(b.ts)-new Date(a.ts)).map(x=>`<div class="item"><div><strong>${x.name}</strong><small>${fmtTime(x.ts)} · ${caffeineDoseLabel(x)}</small></div><div><span class="pill">${x.mg.toFixed(0)} mg</span> <button class="btn edit" onclick="editCaf('${x.id}')">✎</button> <button class="btn danger" onclick="delCaf('${x.id}')">×</button></div></div>`).join(''):'<div class="empty">Nenhuma ingestão hoje.</div>';
  foodList.innerHTML=data.foods.map(f=>`<div class="item"><div><strong>${f.name}</strong><small>${f.mg} mg · ${f.portion}</small></div><div class="actions"><button class="btn secondary" title="Favorito" onclick="toggleFav('${f.id}')">${f.favorite?'★':'☆'}</button><button class="btn edit" onclick="editFood('${f.id}')">✎ Editar</button><button class="btn danger" onclick="delFood('${f.id}')">Excluir</button></div></div>`).join('');
  let ss=[...data.sleep].sort((a,b)=>new Date(b.start)-new Date(a.start));sleepList.innerHTML=ss.length?ss.map(x=>{let h=(new Date(x.end)-new Date(x.start))/36e5,extra=[];if(x.latencyMin!=null)extra.push(`latência ${x.latencyMin} min`);if(x.awakenings!=null)extra.push(`${x.awakenings} despertar(es)`);if(x.wakeScore!=null)extra.push(`acordou ${x.wakeScore}/100`);return `<div class="item"><div><strong>${x.type==='cochilo'?'Cochilo':'Sono principal'} · ${h.toFixed(1)} h</strong><small>${fmtDate(x.start)} · ${fmtTime(x.start)}–${fmtTime(x.end)}${extra.length?' · '+extra.join(' · '):''}${x.note?' · '+x.note:''}</small></div><div><span class="pill">${x.score}/100</span> <button class="btn edit" onclick="editSleep('${x.id}')">✎</button> <button class="btn danger" onclick="delSleep('${x.id}')">×</button></div></div>`}).join(''):'<div class="empty">Nenhum sono registrado.</div>';
- renderHistory();renderCafChart();renderAnalysis();renderTodayDashboard();renderReminderState();renderExperiments();
+ renderHistory();renderCafChart();renderAnalysis();renderTodayDashboard();renderTodayOverview();renderReminderState();renderExperiments();
 }
 function renderCafChart(){let start=new Date();start.setHours(0,0,0,0);let labels=[],vals=[];for(let i=0;i<=96;i++){let t=new Date(start.getTime()+i*15*60e3);labels.push(t.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}));vals.push(caffeineRemainingAt(t))}let ctx=document.getElementById('cafChart');if(cafChart)cafChart.destroy();cafChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:'Cafeína estimada (mg)',data:vals,tension:.35,fill:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#dbeaff'}}},scales:{x:{ticks:{color:'#91a6bd',maxTicksLimit:8},grid:{color:'rgba(255,255,255,.05)'}},y:{beginAtZero:true,ticks:{color:'#91a6bd'},grid:{color:'rgba(255,255,255,.07)'}}}}})}
 let analysisPeriod=7;
@@ -425,7 +560,7 @@ function exportExcel(){
   const summaryRows=[[{v:'Noite de referência'},{v:'Cafeína antes deste sono (mg)'},{v:'Última cafeína'},{v:'Horas desde última cafeína'},{v:'Dormiu'},{v:'Sono principal (h)'},{v:'Nota pessoal'},{v:'Pontuação do monitor'},{v:'Cafeína estimada ao deitar (mg)'},{v:'Tempo real de sono (min)'},{v:'Eficiência (%)'},{v:'Sono profundo (min)'},{v:'Sono REM (min)'},{v:'Tempo acordado (min)'},{v:'Latência (min)'},{v:'Despertares'},{v:'Ronco (min)'},{v:'Como acordou (0-100)'}]];
   mainSleeps.forEach(x=>{let m=sleepMetrics(x),hrs=(new Date(x.end)-new Date(x.start))/36e5,gap=m.last?(new Date(x.start)-new Date(m.last.ts))/36e5:null;summaryRows.push([{v:new Date(sleepNightDate(x.start)+'T12:00').toLocaleDateString('pt-BR')},{v:Number(m.total.toFixed(2))},{v:m.last?fmtTime(m.last.ts):''},{v:gap===null?'':Number(gap.toFixed(2))},{v:fmtTime(x.start)},{v:Number(hrs.toFixed(2))},{v:x.score},{v:x.deviceScore??''},{v:Number(m.atBed.toFixed(2))},{v:x.actualSleepMin??''},{v:(x.actualSleepMin?Number((x.actualSleepMin/((new Date(x.end)-new Date(x.start))/60000)*100).toFixed(1)):'')},{v:x.deepMin??''},{v:x.remMin??''},{v:x.awakeMin??''},{v:x.latencyMin??''},{v:x.awakenings??''},{v:x.snoreMin??''},{v:x.wakeScore??''}])});
   const xml=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${excelSheet('Resumo diário',summaryRows)}${excelSheet('Cafeína',cafRows)}${excelSheet('Sono',sleepRows)}${excelSheet('Itens cadastrados',foodRows)}</Workbook>`;
-  const blob=new Blob([xml],{type:'application/vnd.ms-excel'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9.xls';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
+  const blob=new Blob([xml],{type:'application/vnd.ms-excel'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-1.xls';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
 }
 function createManualSnapshot(){createSnapshot(data,'ponto manual');maintainDailyBackup(data);renderRecovery();showToast('✓ Ponto de recuperação criado')}
 function renderRecovery(){const el=document.getElementById('recoveryList');if(!el)return;const snaps=getSnapshots().slice(0,6);let daily={};try{daily=JSON.parse(localStorage.getItem(DAILY_KEY)||'{}')}catch{}const days=Object.entries(daily).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,4);const items=[];snaps.forEach(s=>items.push({kind:'snapshot',id:s.id,at:s.at,label:s.reason||'Ponto automático',data:s.data}));days.forEach(([d,s])=>items.push({kind:'daily',id:d,at:s.at,label:'Backup diário '+new Date(d+'T12:00').toLocaleDateString('pt-BR'),data:s.data}));el.innerHTML=items.length?items.map((x,i)=>`<div class="item"><div><strong>${x.label}</strong><small>${new Date(x.at).toLocaleString('pt-BR')} · ☕ ${(x.data.caffeine||[]).length} · 🌙 ${(x.data.sleep||[]).length}</small></div><button class="btn secondary" onclick="restoreRecovery('${x.kind}','${x.id}')">Restaurar</button></div>`).join(''):'<div class="empty">Nenhum ponto de recuperação ainda.</div>'}
@@ -435,7 +570,7 @@ Antes: ${data.caffeine.length} cafeína / ${data.sleep.length} sono
 Restaurado: ${(candidate.caffeine||[]).length} cafeína / ${(candidate.sleep||[]).length} sono
 
 O estado atual também será salvo como ponto de recuperação.`))return;createSnapshot(data,'antes de restaurar backup');data=normalizeData(candidate);await persist({reason:'backup restaurado',allowDeletion:true,skipSnapshot:true});showToast('✓ Dados restaurados')}
-function exportData(){let blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9.json';a.click();URL.revokeObjectURL(a.href)}
+function exportData(){let blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-1.json';a.click();URL.revokeObjectURL(a.href)}
 function importData(ev){let f=ev.target.files[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{const incoming=normalizeData(JSON.parse(r.result));if(!confirm(`Importar este backup?\n\nAtual: ${data.caffeine.length} ingestões / ${data.sleep.length} sonos\nArquivo: ${incoming.caffeine.length} ingestões / ${incoming.sleep.length} sonos\n\nO estado atual será salvo para recuperação.`))return;createSnapshot(data,'antes de importar JSON');data=incoming;persist({reason:'JSON importado',allowDeletion:true,skipSnapshot:true})}catch(e){alert('Arquivo inválido')}};r.readAsText(f);ev.target.value=''}
 cafQty.addEventListener('input',()=>syncCafPreview(false));cafItem.addEventListener('change',()=>syncCafPreview(true));cafDate.value=todayStr();cafTime.value=currentTimeStr();expStart.value=todayStr();initStorage();setInterval(()=>{renderTodayDashboard();checkSmartReminder()},60000);
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
