@@ -6,7 +6,23 @@
 <meta name="theme-color" content="#0b1320" />
 <link rel="manifest" href="manifest.json" />
 <title>Somnia</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js">
+function restoreMedicationMirror(){
+  try{
+    ensureMedicationData();
+    const raw=localStorage.getItem('somnia_medications_v1');
+    if(!raw)return;
+    const m=JSON.parse(raw);
+    if(Array.isArray(m.medications)&&m.medications.length)data.medications=m.medications;
+    if(Array.isArray(m.medDoses)&&m.medDoses.length)data.medDoses=m.medDoses;
+    if(Array.isArray(m.rhinitis)&&m.rhinitis.length)data.rhinitis=m.rhinitis;
+  }catch(e){}
+}
+window.addEventListener('load',()=>setTimeout(()=>{
+  restoreMedicationMirror();
+  if(typeof renderMedicationPage==='function')renderMedicationPage();
+},500));
+</script>
 <style>
 :root{--bg:#08111d;--card:rgba(255,255,255,.08);--card2:rgba(255,255,255,.12);--text:#f7fbff;--muted:#9db0c7;--accent:#71c4ff;--accent2:#8c7cff;--green:#52d3a5;--red:#ff7d7d;--line:rgba(255,255,255,.12)}
 *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(circle at top,#15304d 0,#0b1727 35%,#07111d 100%);color:var(--text);min-height:100vh}
@@ -173,6 +189,28 @@ body{padding-bottom:104px!important}
 
 
 #targetCaffeineTime{font-size:24px!important}#targetCaffeineCountdown{line-height:1.5}
+
+/* Somnia v9.3.5 — navegação robusta */
+.tabs{
+  z-index:2147483000!important;
+  pointer-events:auto!important;
+  touch-action:manipulation!important;
+  isolation:isolate!important;
+}
+.tabs::before,.tabs::after{pointer-events:none!important}
+.tabs .tab{
+  pointer-events:auto!important;
+  touch-action:manipulation!important;
+  position:relative!important;
+  z-index:2!important;
+  cursor:pointer!important;
+  -webkit-tap-highlight-color:transparent;
+}
+.tabs .tab *{pointer-events:none!important}
+.page{position:relative;z-index:1}
+.toast,.undo-toast{pointer-events:none!important}
+#appToast{pointer-events:none!important}
+
 </style>
   <link rel="apple-touch-icon" href="icon-192.png">
 </head>
@@ -375,12 +413,12 @@ body{padding-bottom:104px!important}
 </div>
 
 <nav class="glass tabs">
-<button class="tab active" onclick="go('today',this)">☀️<span>Hoje</span></button><button class="tab active" onclick="go('caffeine',this)"><span>☕</span>Cafeína</button>
-<button class="tab" onclick="go('sleep',this)"><span>🌙</span>Sono</button>
-<button class="tab" onclick="go('analysis',this)"><span>📊</span>Análises</button>
-<button class="tab" onclick="go('history',this)"><span>📅</span>Histórico</button>
-<button class="tab" onclick="go('meds',this)"><span>💊</span>Remédios</button>
-<button class="tab" onclick="go('more',this)"><span>⚙️</span>Mais</button>
+<button class="tab active" data-page="today">☀️<span>Hoje</span></button><button class="tab" data-page="caffeine"><span>☕</span>Cafeína</button>
+<button class="tab" data-page="sleep"><span>🌙</span>Sono</button>
+<button class="tab" data-page="analysis"><span>📊</span>Análises</button>
+<button class="tab" data-page="history"><span>📅</span>Histórico</button>
+<button class="tab" data-page="meds"><span>💊</span>Remédios</button>
+<button class="tab" data-page="more"><span>⚙️</span>Mais</button>
 </nav>
 <div id="appToast" class="toast" role="status" aria-live="polite"></div>
 <script>
@@ -575,7 +613,69 @@ function renderReminderState(){const on=!!data.settings.smartReminders;reminderT
 function notifySmart(title,body,key){if(!data.settings.smartReminders||data.settings.lastReminderKey===key)return;data.settings.lastReminderKey=key;localStorage.setItem(KEY,JSON.stringify(data));showToast(`☕ ${body}`);if('Notification' in window&&Notification.permission==='granted'){try{new Notification(title,{body,icon:'icon-192.png'})}catch{}}}
 function checkSmartReminder(){if(!data.settings.smartReminders)return;const now=new Date(),cut=personalCutoff(90),day=todayStr();if(cut.hour!==null){let h=now.getHours()+now.getMinutes()/60;if(h>=cut.hour&&h<cut.hour+0.08)notifySmart('Somnia · cutoff de cafeína',`Você chegou ao seu cutoff pessoal estimado (${clockFromHour(cut.hour)}).`,`cutoff-${day}`)}let pred=caffeineRemainingAt(plannedBedtimeDate(),currentAwakeEntries());if(pred>data.settings.targetBedMg*1.5)notifySmart('Somnia · cafeína ao deitar',`Previsão de ${pred.toFixed(0)} mg ao dormir, acima da sua meta de ${data.settings.targetBedMg} mg.`,`bedmg-${day}-${Math.round(pred/10)}`)}
 
-function go(id,btn){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.getElementById('page-'+id).classList.add('active');document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));btn.classList.add('active');if(id==='caffeine'){cafDate.value=todayStr();cafTime.value=currentTimeStr();rhinitisDate.value=todayStr();medDate.value=todayStr();medTime.value=currentTimeStr();medSelect.addEventListener('change',()=>{const m=data.medications?.find(x=>x.id===medSelect.value);if(m){medDoseAmount.value=m.defaultDose??'';medDoseUnit.value=m.unit||''}});if(!cafQty.value)syncCafPreview(true);}if(id==='analysis')renderAnalysis();if(id==='today'){renderTodayOverview();renderTargetCaffeineTime();}if(id==='meds')renderMedicationPage()}
+
+function activateSomniaPage(pageId, button){
+  const page=document.getElementById('page-'+pageId);
+  if(!page)return;
+
+  document.querySelectorAll('.page').forEach(el=>el.classList.remove('active'));
+  page.classList.add('active');
+
+  document.querySelectorAll('.tabs .tab').forEach(el=>el.classList.remove('active'));
+  if(button)button.classList.add('active');
+
+  try{
+    if(pageId==='caffeine'){
+      if(window.cafDate)cafDate.value=todayStr();
+      if(window.cafTime)cafTime.value=currentTimeStr();
+      if(typeof syncCafPreview==='function' && window.cafQty && !cafQty.value)syncCafPreview(true);
+    }
+    if(pageId==='analysis' && typeof renderAnalysis==='function')renderAnalysis();
+    if(pageId==='today'){
+      if(typeof renderTodayOverview==='function')renderTodayOverview();
+      if(typeof renderTargetCaffeineTime==='function')renderTargetCaffeineTime();
+    }
+    if(pageId==='meds' && typeof renderMedicationPage==='function')renderMedicationPage();
+    if(pageId==='history' && typeof renderHistory==='function')renderHistory();
+  }catch(err){
+    console.error('Erro ao atualizar a página '+pageId,err);
+  }
+
+  window.scrollTo({top:0,behavior:'auto'});
+}
+
+function installSomniaNavigation(){
+  const nav=document.querySelector('.tabs');
+  if(!nav)return;
+
+  nav.querySelectorAll('.tab').forEach(button=>{
+    button.removeAttribute('onclick');
+    button.style.pointerEvents='auto';
+  });
+
+  nav.addEventListener('click',event=>{
+    const button=event.target.closest('.tab[data-page]');
+    if(!button)return;
+    event.preventDefault();
+    event.stopPropagation();
+    activateSomniaPage(button.dataset.page,button);
+  },true);
+
+  nav.addEventListener('pointerup',event=>{
+    const button=event.target.closest('.tab[data-page]');
+    if(!button)return;
+    event.preventDefault();
+    activateSomniaPage(button.dataset.page,button);
+  },true);
+
+  const active=nav.querySelector('.tab.active')||nav.querySelector('[data-page="today"]');
+  if(active)activateSomniaPage(active.dataset.page,active);
+}
+
+document.addEventListener('DOMContentLoaded',installSomniaNavigation);
+window.addEventListener('load',()=>setTimeout(installSomniaNavigation,100));
+
+function go(id,btn){activateSomniaPage(id,btn)}
 function parsePortionText(v){v=String(v||'').trim();let m=v.match(/^\s*([0-9]+(?:[.,][0-9]+)?)\s*(.*)$/);if(!m)return{amount:1,unit:v||'porção'};let amount=parseFloat(m[1].replace(',','.'));return{amount:Number.isFinite(amount)&&amount>0?amount:1,unit:(m[2]||'porção').trim()}}
 function caffeineDoseLabel(x){if(Number.isFinite(+x.consumedAmount)&&x.consumedUnit)return `${(+x.consumedAmount).toLocaleString('pt-BR')} ${x.consumedUnit}`;return `${x.qty} porção(ões)`}
 function syncCafPreview(resetAmount=false){let f=data.foods.find(x=>x.id===document.getElementById('cafItem').value);if(!f)return;let p=parsePortionText(f.portion);if(resetAmount||!document.getElementById('cafQty').value)document.getElementById('cafQty').value=p.amount;let amount=parseFloat(String(document.getElementById('cafQty').value).replace(',','.'))||0,factor=p.amount>0?amount/p.amount:amount;document.getElementById('cafUnitPreview').value=p.unit;document.getElementById('cafPortionPreview').value=`${p.amount.toLocaleString('pt-BR')} ${p.unit} = ${Number(f.mg).toLocaleString('pt-BR',{maximumFractionDigits:1})} mg`;document.getElementById('cafMgPreview').value=(f.mg*factor).toFixed(1)+' mg'}
@@ -626,19 +726,74 @@ function restoreTrash(trashId){const t=data.trash.find(x=>x.trashId===trashId);i
 function purgeTrash(trashId){if(!confirm('Excluir definitivamente este item da lixeira?'))return;data.trash=data.trash.filter(x=>x.trashId!==trashId);persist({reason:'item excluído definitivamente',allowDeletion:true})}
 function renderTrash(){const el=document.getElementById('trashList');if(!el)return;const arr=[...data.trash].sort((a,b)=>new Date(b.deletedAt)-new Date(a.deletedAt));el.innerHTML=arr.length?arr.map(t=>{let label=t.type==='caffeine'?`${t.record.name||'Cafeína'} · ${Number(t.record.mg||0).toFixed(0)} mg`:t.type==='sleep'?`${t.record.type==='cochilo'?'Cochilo':'Sono'} · ${fmtDate(t.record.start)}`:`${t.record.name||'Bebida'}`;return `<div class="item"><div><strong>${label}</strong><small>Excluído em ${fmtDate(t.deletedAt)} ${fmtTime(t.deletedAt)}</small></div><div><button class="btn secondary" onclick="restoreTrash('${t.trashId}')">Restaurar</button> <button class="btn danger" onclick="purgeTrash('${t.trashId}')">Apagar</button></div></div>`}).join(''):'<div class="empty">Lixeira vazia.</div>'} function editCaf(id){let x=data.caffeine.find(v=>v.id===id);if(!x)return;let f=data.foods.find(v=>v.id===x.foodId),p=parsePortionText(f?.portion||`${x.baseAmount||1} ${x.consumedUnit||'porção'}`),current=Number.isFinite(+x.consumedAmount)?+x.consumedAmount:(+x.qty||1)*p.amount;let q=prompt(`Tamanho consumido (${p.unit}):`,current);if(q===null)return;q=parseFloat(String(q).replace(',','.'));let day=prompt('Data (AAAA-MM-DD):',new Date(x.ts).toISOString().slice(0,10));if(day===null)return;let hh=prompt('Horário (HH:MM):',fmtTime(x.ts));if(!q||!/^\d{4}-\d{2}-\d{2}$/.test(day)||!/^\d{2}:\d{2}$/.test(hh))return;let factor=q/p.amount,baseMg=f?f.mg:(x.mg/(x.qty||1));x.qty=factor;x.consumedAmount=q;x.consumedUnit=p.unit;x.baseAmount=p.amount;x.mg=baseMg*factor;x.ts=new Date(day+'T'+hh).toISOString();persist({reason:'cafeína editada'})}
 function saveSettings(){data.settings.halfLife=Math.max(2,Math.min(12,parseFloat(halfLife.value)||5));data.settings.bedtime=bedtime.value||'23:30';data.settings.wakeTime=wakeTime.value||'07:30';data.settings.weekdayMargin=Math.max(0,parseInt(weekdayMargin.value)||30);data.settings.weekendMargin=Math.max(data.settings.weekdayMargin,parseInt(weekendMargin.value)||90);data.settings.targetBedMg=Math.max(0,parseFloat(targetBedMg.value)||25);data.settings.sleepTargetHours=Math.max(4,Math.min(12,parseFloat(sleepTargetHours.value)||8));persist({reason:'configurações alteradas'})}
-function ensureMedicationData(){data.medications=data.medications||[];data.medDoses=data.medDoses||[];data.rhinitis=data.rhinitis||[]}
+
 function renderMedicationPage(){if(!document.getElementById('medSelect'))return;ensureMedicationData();medSelect.innerHTML=data.medications.length?data.medications.map(m=>`<option value="${m.id}">${m.name}</option>`).join(''):'<option value="">Cadastre um medicamento abaixo</option>';const selected=data.medications.find(m=>m.id===medSelect.value)||data.medications[0];if(selected){medSelect.value=selected.id;medDoseAmount.value=selected.defaultDose??'';medDoseUnit.value=selected.unit||''}else{medDoseAmount.value='';medDoseUnit.value=''}medDoseList.innerHTML=data.medDoses.length?[...data.medDoses].sort((a,b)=>new Date(b.ts)-new Date(a.ts)).slice(0,30).map(d=>{const m=data.medications.find(x=>x.id===d.medId);return `<div class="item"><div><strong>${m?.name||d.medName||'Medicamento'}</strong><small>${new Date(d.ts).toLocaleString('pt-BR')} · ${d.amount} ${d.unit||''}${d.note?` · ${d.note}`:''}</small></div><div class="actions"><button class="btn secondary" onclick="editMedicationDose('${d.id}')">✎</button><button class="btn secondary" onclick="deleteMedicationDose('${d.id}')">×</button></div></div>`}).join(''):'<div class="empty">Nenhuma dose registrada.</div>';medCatalog.innerHTML=data.medications.length?data.medications.map(m=>`<div class="item"><div><strong>${m.name}</strong><small>${m.defaultDose??'—'} ${m.unit||''}${m.active?` · ${m.active}`:''}</small></div><div class="actions"><button class="btn secondary" onclick="editMedication('${m.id}')">✎</button><button class="btn secondary" onclick="deleteMedication('${m.id}')">×</button></div></div>`).join(''):'<div class="empty">Nenhum medicamento cadastrado.</div>'}
-function saveMedication(){ensureMedicationData();const name=medName.value.trim(),unit=medUnit.value.trim(),dose=medDefaultDose.value===''?null:Number(medDefaultDose.value),active=medActive.value.trim();if(!name)return showToast('Digite o nome do medicamento');const id=medEditId.value||crypto.randomUUID(),rec={id,name,unit,defaultDose:dose,active},i=data.medications.findIndex(x=>x.id===id);if(i>=0)data.medications[i]=rec;else data.medications.push(rec);cancelMedicationEdit();persist({reason:'medicamento salvo'});renderMedicationPage()}
+
+function saveMedication(){
+  ensureMedicationData();
+  const name=(medName.value||'').trim();
+  const unit=(medUnit.value||'').trim();
+  const doseRaw=medDefaultDose.value;
+  const dose=doseRaw===''?null:Number(doseRaw);
+  const active=(medActive.value||'').trim();
+  if(!name){showToast('Digite o nome do medicamento');return}
+  const id=medEditId.value||crypto.randomUUID();
+  const rec={id,name,unit,defaultDose:Number.isFinite(dose)?dose:null,active};
+  const i=data.medications.findIndex(x=>String(x.id)===String(id));
+  if(i>=0)data.medications[i]=rec;else data.medications.push(rec);
+
+  localStorage.setItem('somnia_medications_v1',JSON.stringify({
+    medications:data.medications,
+    medDoses:data.medDoses,
+    rhinitis:data.rhinitis
+  }));
+  persist({reason:'medicamento salvo'});
+
+  medEditId.value='';medName.value='';medDefaultDose.value='';medUnit.value='';medActive.value='';
+  renderMedicationPage();
+  showToast('Medicamento salvo');
+}
 function editMedication(id){const m=data.medications.find(x=>x.id===id);if(!m)return;medEditId.value=m.id;medName.value=m.name;medDefaultDose.value=m.defaultDose??'';medUnit.value=m.unit||'';medActive.value=m.active||''}
 function cancelMedicationEdit(){medEditId.value='';medName.value='';medDefaultDose.value='';medUnit.value='';medActive.value=''}
 function deleteMedication(id){if(!confirm('Excluir este medicamento?'))return;data.medications=data.medications.filter(x=>x.id!==id);persist({reason:'medicamento excluído'});renderMedicationPage()}
-function saveMedicationDose(){ensureMedicationData();const med=data.medications.find(x=>x.id===medSelect.value);if(!med)return showToast('Cadastre ou selecione um medicamento');const ts=new Date(`${medDate.value||todayStr()}T${medTime.value||currentTimeStr()}`),amount=Number(medDoseAmount.value);if(!Number.isFinite(amount)||amount<=0)return showToast('Informe uma dose válida');const rec={id:window.__editingMedDoseId||crypto.randomUUID(),medId:med.id,medName:med.name,amount,unit:med.unit||'',ts:ts.toISOString(),note:medDoseNote.value.trim()};if(window.__editingMedDoseId){const i=data.medDoses.findIndex(x=>x.id===window.__editingMedDoseId);if(i>=0)data.medDoses[i]=rec;else data.medDoses.push(rec)}else data.medDoses.push(rec);window.__editingMedDoseId=null;medDoseNote.value='';medDate.value=todayStr();medTime.value=currentTimeStr();persist({reason:'dose registrada'});renderMedicationPage()}
+
+function saveMedicationDose(){
+  ensureMedicationData();
+  const med=data.medications.find(x=>String(x.id)===String(medSelect.value));
+  if(!med){showToast('Cadastre ou selecione um medicamento');return}
+  const amount=Number(medDoseAmount.value);
+  if(!Number.isFinite(amount)||amount<=0){showToast('Informe uma dose válida');return}
+  const ts=new Date(`${medDate.value||todayStr()}T${medTime.value||currentTimeStr()}`);
+  const id=window.__editingMedDoseId||crypto.randomUUID();
+  const rec={id,medId:med.id,medName:med.name,amount,unit:med.unit||'',ts:ts.toISOString(),note:(medDoseNote.value||'').trim()};
+  const i=data.medDoses.findIndex(x=>String(x.id)===String(id));
+  if(i>=0)data.medDoses[i]=rec;else data.medDoses.push(rec);
+  window.__editingMedDoseId=null;
+
+  localStorage.setItem('somnia_medications_v1',JSON.stringify({
+    medications:data.medications,
+    medDoses:data.medDoses,
+    rhinitis:data.rhinitis
+  }));
+  persist({reason:'dose de medicamento registrada'});
+
+  medDoseNote.value='';medDate.value=todayStr();medTime.value=currentTimeStr();
+  renderMedicationPage();
+  showToast('Dose registrada');
+}
 function editMedicationDose(id){const d=data.medDoses.find(x=>x.id===id);if(!d)return;window.__editingMedDoseId=id;medSelect.value=d.medId;medDoseAmount.value=d.amount;medDoseUnit.value=d.unit||'';const dt=new Date(d.ts),p=n=>String(n).padStart(2,'0');medDate.value=`${dt.getFullYear()}-${p(dt.getMonth()+1)}-${p(dt.getDate())}`;medTime.value=`${p(dt.getHours())}:${p(dt.getMinutes())}`;medDoseNote.value=d.note||''}
 function deleteMedicationDose(id){if(!confirm('Excluir esta dose?'))return;data.medDoses=data.medDoses.filter(x=>x.id!==id);persist({reason:'dose excluída'});renderMedicationPage()}
 function saveRhinitis(){ensureMedicationData();const date=rhinitisDate.value||todayStr(),rec={date,severity:Number(rhinitisSeverity.value||0),obstruction:Number(rhinitisObstruction.value||0),sneezing:Number(rhinitisSneezing.value||0),note:rhinitisNote.value.trim()},i=data.rhinitis.findIndex(x=>x.date===date);if(i>=0)data.rhinitis[i]=rec;else data.rhinitis.push(rec);persist({reason:'rinite registrada'});renderMedicationAnalysis()}
 function medicationDosesBeforeSleep(sleep){const end=new Date(sleep.start),prev=data.sleep.filter(x=>x.type==='principal'&&new Date(x.end)<end).sort((a,b)=>new Date(b.end)-new Date(a.end))[0],start=prev?new Date(prev.end):new Date(end.getTime()-24*36e5);return data.medDoses.filter(d=>new Date(d.ts)>start&&new Date(d.ts)<end)}
 function renderMedicationAnalysis(){if(!document.getElementById('rhinitisSleepAnalysis'))return;ensureMedicationData();const nights=data.sleep.filter(s=>s.type==='principal').map(s=>{const date=sleepNightDate(s.start),r=data.rhinitis.find(x=>x.date===date)||null,doses=medicationDosesBeforeSleep(s),dur=(new Date(s.end)-new Date(s.start))/36e5;return{s,r,doses,dur}});if(nights.length<3){rhinitisSleepAnalysis.textContent='São necessárias pelo menos 3 noites.';medSleepTable.innerHTML='';return}const severe=nights.filter(n=>(n.r?.severity??0)>=5),mild=nights.filter(n=>(n.r?.severity??0)<5),withMed=nights.filter(n=>n.doses.length),withoutMed=nights.filter(n=>!n.doses.length),avg=(arr,fn)=>arr.length?arr.reduce((a,x)=>a+fn(x),0)/arr.length:null,fmt=v=>v==null?'—':v.toFixed(1);rhinitisSleepAnalysis.textContent=`Rinite ≥5: ${severe.length} noites; rinite <5: ${mild.length}. Com dose: ${withMed.length}; sem dose: ${withoutMed.length}.`;medSleepTable.innerHTML=`<div class="med-analysis-grid"><div class="med-analysis-card"><strong>Rinite ≥5</strong><small>Nota ${fmt(avg(severe,n=>Number(n.s.score||0)))} · Duração ${fmt(avg(severe,n=>n.dur))} h · Ronco ${fmt(avg(severe,n=>Number(n.s.snoreMin||0)))} min</small></div><div class="med-analysis-card"><strong>Rinite <5</strong><small>Nota ${fmt(avg(mild,n=>Number(n.s.score||0)))} · Duração ${fmt(avg(mild,n=>n.dur))} h · Ronco ${fmt(avg(mild,n=>Number(n.s.snoreMin||0)))} min</small></div><div class="med-analysis-card"><strong>Com medicamento</strong><small>Nota ${fmt(avg(withMed,n=>Number(n.s.score||0)))} · Latência ${fmt(avg(withMed,n=>Number(n.s.latencyMin||0)))} min</small></div><div class="med-analysis-card"><strong>Sem medicamento</strong><small>Nota ${fmt(avg(withoutMed,n=>Number(n.s.score||0)))} · Latência ${fmt(avg(withoutMed,n=>Number(n.s.latencyMin||0)))} min</small></div></div>`}
-function renderAll(){renderTargetCaffeineTime();ensureMedicationData();renderMedicationPage();renderMedicationAnalysis();renderTodayDashboard();renderTodayOverview();renderPeriodComparison();renderBackupStatus();
+
+function ensureMedicationData(){
+  if(!window.data)return;
+  if(!Array.isArray(data.medications))data.medications=[];
+  if(!Array.isArray(data.medDoses))data.medDoses=[];
+  if(!Array.isArray(data.rhinitis))data.rhinitis=[];
+}
+function renderAll(){ensureMedicationData();renderTargetCaffeineTime();ensureMedicationData();renderMedicationPage();renderMedicationAnalysis();renderTodayDashboard();renderTodayOverview();renderPeriodComparison();renderBackupStatus();
  nowBadge.textContent=new Date().toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'short'});
  cafItem.innerHTML=data.foods.map(f=>`<option value="${f.id}">${f.name}</option>`).join(''); syncCafPreview(); halfLife.value=data.settings.halfLife;bedtime.value=data.settings.bedtime;wakeTime.value=data.settings.wakeTime||'07:30';weekdayMargin.value=data.settings.weekdayMargin??30;weekendMargin.value=data.settings.weekendMargin??90;targetBedMg.value=data.settings.targetBedMg;sleepTargetHours.value=data.settings.sleepTargetHours??8;halfLifeLabel.textContent=`Meia-vida: ${data.settings.halfLife} h`;bedtimeBadge.textContent=data.settings.bedtime;let bt=new Date(todayStr()+'T'+data.settings.bedtime);if(bt<new Date())bt.setDate(bt.getDate()+1);let pred=caffeineRemainingAt(bt);bedPrediction.innerHTML=`<strong>${pred.toFixed(0)} mg</strong> estimados às ${data.settings.bedtime}. ${pred<=data.settings.targetBedMg?'Dentro da sua meta configurada.':'Acima da meta de '+data.settings.targetBedMg+' mg; evite novas doses se quiser reduzir a cafeína ao deitar.'}`;favoriteList.innerHTML=data.foods.filter(f=>f.favorite).length?data.foods.filter(f=>f.favorite).map(f=>`<button class="btn secondary fav" onclick="quickAdd('${f.id}',this)"><strong>${f.name}</strong><small>${formatFavoritePortion(f)}</small></button>`).join(''):'<div class="empty" style="grid-column:1/-1">Marque itens com ★ na aba Mais.</div>';
  let today=data.caffeine.filter(x=>localDateStr(new Date(x.ts))===todayStr()); todayTotal.textContent=today.reduce((a,b)=>a+b.mg,0).toFixed(0)+' mg';currentCaf.textContent=caffeineRemainingAt(new Date()).toFixed(0)+' mg';
@@ -850,7 +1005,7 @@ function exportExcel(){
   const summaryRows=[[{v:'Noite de referência'},{v:'Cafeína antes deste sono (mg)'},{v:'Última cafeína'},{v:'Horas desde última cafeína'},{v:'Dormiu'},{v:'Sono principal (h)'},{v:'Nota pessoal'},{v:'Pontuação do monitor'},{v:'Cafeína estimada ao deitar (mg)'},{v:'Tempo real de sono (min)'},{v:'Eficiência (%)'},{v:'Sono profundo (min)'},{v:'Sono REM (min)'},{v:'Tempo acordado (min)'},{v:'Latência (min)'},{v:'Despertares'},{v:'Ronco (min)'},{v:'Como acordou (0-100)'}]];
   mainSleeps.forEach(x=>{let m=sleepMetrics(x),hrs=(new Date(x.end)-new Date(x.start))/36e5,gap=m.last?(new Date(x.start)-new Date(m.last.ts))/36e5:null;summaryRows.push([{v:new Date(sleepNightDate(x.start)+'T12:00').toLocaleDateString('pt-BR')},{v:Number(m.total.toFixed(2))},{v:m.last?fmtTime(m.last.ts):''},{v:gap===null?'':Number(gap.toFixed(2))},{v:fmtTime(x.start)},{v:Number(hrs.toFixed(2))},{v:x.score},{v:x.deviceScore??''},{v:Number(m.atBed.toFixed(2))},{v:x.actualSleepMin??''},{v:(x.actualSleepMin?Number((x.actualSleepMin/((new Date(x.end)-new Date(x.start))/60000)*100).toFixed(1)):'')},{v:x.deepMin??''},{v:x.remMin??''},{v:x.awakeMin??''},{v:x.latencyMin??''},{v:x.awakenings??''},{v:x.snoreMin??''},{v:x.wakeScore??''}])});
   const xml=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${excelSheet('Resumo diário',summaryRows)}${excelSheet('Cafeína',cafRows)}${excelSheet('Sono',sleepRows)}${excelSheet('Itens cadastrados',foodRows)}</Workbook>`;
-  const blob=new Blob([xml],{type:'application/vnd.ms-excel'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-3-2-2.xls';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
+  const blob=new Blob([xml],{type:'application/vnd.ms-excel'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-3-5-2.xls';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
 }
 function createManualSnapshot(){createSnapshot(data,'ponto manual');maintainDailyBackup(data);renderRecovery();showToast('✓ Ponto de recuperação criado')}
 function renderRecovery(){const el=document.getElementById('recoveryList');if(!el)return;const snaps=getSnapshots().slice(0,6);let daily={};try{daily=JSON.parse(localStorage.getItem(DAILY_KEY)||'{}')}catch{}const days=Object.entries(daily).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,4);const items=[];snaps.forEach(s=>items.push({kind:'snapshot',id:s.id,at:s.at,label:s.reason||'Ponto automático',data:s.data}));days.forEach(([d,s])=>items.push({kind:'daily',id:d,at:s.at,label:'Backup diário '+new Date(d+'T12:00').toLocaleDateString('pt-BR'),data:s.data}));el.innerHTML=items.length?items.map((x,i)=>`<div class="item"><div><strong>${x.label}</strong><small>${new Date(x.at).toLocaleString('pt-BR')} · ☕ ${(x.data.caffeine||[]).length} · 🌙 ${(x.data.sleep||[]).length}</small></div><button class="btn secondary" onclick="restoreRecovery('${x.kind}','${x.id}')">Restaurar</button></div>`).join(''):'<div class="empty">Nenhum ponto de recuperação ainda.</div>'}
@@ -860,7 +1015,7 @@ Antes: ${data.caffeine.length} cafeína / ${data.sleep.length} sono
 Restaurado: ${(candidate.caffeine||[]).length} cafeína / ${(candidate.sleep||[]).length} sono
 
 O estado atual também será salvo como ponto de recuperação.`))return;createSnapshot(data,'antes de restaurar backup');data=normalizeData(candidate);await persist({reason:'backup restaurado',allowDeletion:true,skipSnapshot:true});showToast('✓ Dados restaurados')}
-function exportData(){let blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-3-2-2.json';a.click();URL.revokeObjectURL(a.href)}
+function exportData(){let blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-3-5-2.json';a.click();URL.revokeObjectURL(a.href)}
 function importData(ev){let f=ev.target.files[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{const incoming=normalizeData(JSON.parse(r.result));if(!confirm(`Importar este backup?\n\nAtual: ${data.caffeine.length} ingestões / ${data.sleep.length} sonos\nArquivo: ${incoming.caffeine.length} ingestões / ${incoming.sleep.length} sonos\n\nO estado atual será salvo para recuperação.`))return;createSnapshot(data,'antes de importar JSON');data=incoming;persist({reason:'JSON importado',allowDeletion:true,skipSnapshot:true})}catch(e){alert('Arquivo inválido')}};r.readAsText(f);ev.target.value=''}
 cafQty.addEventListener('input',()=>syncCafPreview(false));cafItem.addEventListener('change',()=>syncCafPreview(true));cafDate.value=todayStr();cafTime.value=currentTimeStr();expStart.value=todayStr();initStorage();setTimeout(renderTargetCaffeineTime,300);setInterval(()=>{renderTodayDashboard();checkSmartReminder()},60000);
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
