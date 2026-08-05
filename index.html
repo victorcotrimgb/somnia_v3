@@ -458,13 +458,21 @@ body{padding-bottom:104px!important}
 function restoreMedicationMirror(){
   try{
     ensureMedicationData();
-    const raw=localStorage.getItem('somnia_medications_v1');
+    const raw=localStorage.getItem('somnia_medications_v2')||localStorage.getItem('somnia_medications_v1');
     if(!raw)return;
-    const m=JSON.parse(raw);
-    if(Array.isArray(m.medications)&&m.medications.length)data.medications=m.medications;
-    if(Array.isArray(m.medDoses)&&m.medDoses.length)data.medDoses=m.medDoses;
-    if(Array.isArray(m.rhinitis)&&m.rhinitis.length)data.rhinitis=m.rhinitis;
-  }catch(e){}
+    const mirror=JSON.parse(raw);
+
+    const medIds=new Set(data.medications.map(x=>String(x.id)));
+    (mirror.medications||[]).forEach(x=>{if(!medIds.has(String(x.id)))data.medications.push(x);});
+
+    const doseIds=new Set(data.medDoses.map(x=>String(x.id)));
+    (mirror.medDoses||[]).forEach(x=>{if(!doseIds.has(String(x.id)))data.medDoses.push(x);});
+
+    const rhinitisDates=new Set(data.rhinitis.map(x=>x.date));
+    (mirror.rhinitis||[]).forEach(x=>{if(!rhinitisDates.has(x.date))data.rhinitis.push(x);});
+  }catch(error){
+    console.warn('Falha ao restaurar medicamentos',error);
+  }
 }
 window.addEventListener('load',()=>setTimeout(()=>{
   restoreMedicationMirror();
@@ -605,6 +613,9 @@ function runCaffeinePlanner(){
     return;
   }
 
+  if(!plannerDate.value)plannerDate.value=todayStr();
+  if(!plannerTime.value)plannerTime.value=currentTimeStr();
+
   const ref=plannerReference(food);
   const amount=Number(plannerAmount.value||0);
   if(!Number.isFinite(amount)||amount<=0){
@@ -613,26 +624,31 @@ function runCaffeinePlanner(){
     return;
   }
 
-  const doseMg=Number(food.mg||0)*(amount/ref.amount);
-  const ts=new Date(`${plannerDate.value||todayStr()}T${plannerTime.value||currentTimeStr()}`);
-  const simulated={id:'simulation',name:food.name,mg:doseMg,ts:ts.toISOString()};
+  const timestamp=new Date(`${plannerDate.value}T${plannerTime.value}`);
+  if(Number.isNaN(timestamp.getTime())){
+    plannerResult.textContent='Data ou horário inválido.';
+    plannerTargetTime.textContent='—';
+    return;
+  }
 
-  const existing=(data.caffeine||[]).filter(c=>new Date(c.ts)<=new Date());
+  const doseMg=Number(food.mg||0)*(amount/ref.amount);
+  const simulated={id:'simulation',name:food.name,mg:doseMg,ts:timestamp.toISOString()};
+  const now=new Date();
+  const existing=(data.caffeine||[]).filter(c=>new Date(c.ts)<=now);
   const entries=[...existing,simulated];
   const target=Number(data.settings?.targetBedMg??25);
-  const targetResult=findTargetTimeFromEntries(target,entries,new Date());
+  const targetResult=findTargetTimeFromEntries(target,entries,now);
 
   plannerDosePreview.textContent=`${doseMg.toFixed(0)} mg`;
   plannerTargetTime.textContent=targetResult?formatTargetClock(targetResult.date):'>72 h';
 
   const [bh,bm]=(data.settings.bedtime||'23:30').split(':').map(Number);
-  const bedtime=new Date(ts);
+  const bedtime=new Date(timestamp);
   bedtime.setHours(bh,bm,0,0);
-  if(bedtime<=ts)bedtime.setDate(bedtime.getDate()+1);
+  if(bedtime<=timestamp)bedtime.setDate(bedtime.getDate()+1);
 
   const before=caffeineAtWithEntries(bedtime,existing);
   const after=caffeineAtWithEntries(bedtime,entries);
-  const lastAllowed=targetResult&&targetResult.date<=bedtime;
 
   plannerResult.textContent=
     `${food.name}, ${amount.toLocaleString('pt-BR')} ${ref.unit}: ${doseMg.toFixed(0)} mg. `+
@@ -652,7 +668,7 @@ function manualBackup(){let snap=JSON.parse(JSON.stringify(data));data.snapshots
 function renderBackupStatus(){if(!window.backupStatus)return;let last=(data.snapshots||[]).slice().sort((a,b)=>new Date(b.ts)-new Date(a.ts))[0];backupStatus.textContent='Último backup local: '+(last?new Date(last.ts).toLocaleString('pt-BR'):'nenhum')}
 
 const KEY='cafesleep_v1'; // espelho de compatibilidade; não é mais o banco principal
-const DB_NAME='somnia_protected_v1',DB_VERSION=2,SNAPSHOT_KEY='somnia_snapshots_v1',DAILY_KEY='somnia_daily_backups_v1';
+const DB_NAME='somnia_protected_v1',DB_VERSION=4,SNAPSHOT_KEY='somnia_snapshots_v1',DAILY_KEY='somnia_daily_backups_v1';
 const defaults={foods:[{id:'f1',name:'Café coado',mg:100,portion:'200 ml'},{id:'f2',name:'Espresso',mg:65,portion:'1 dose'},{id:'f3',name:'Energético',mg:80,portion:'250 ml'}],caffeine:[],sleep:[],trash:[],medications:[],medDoses:[],rhinitis:[],settings:{halfLife:5,bedtime:'23:30',wakeTime:'07:30',weekdayMargin:30,weekendMargin:90,targetBedMg:25,sleepTargetHours:8,experiments:[],smartReminders:false,lastReminderKey:''}};
 let data=normalizeData(null),lastSavedData=deepClone(data),db=null,storageReady=false;let cafChart,corrChart,trendChart,bedtimeCafChart,gapBedtimeChart,wakeDeviationChart;
 function deepClone(v){return JSON.parse(JSON.stringify(v))}
@@ -722,55 +738,131 @@ function countDrop(before,after){
     .map(k=>({k,b:before[k]?.length||0,a:after[k]?.length||0}))
     .filter(x=>x.a<x.b);
 }
+
+function safeUiCall(name,fn){
+  try{return fn()}catch(error){
+    console.error(`Falha de interface em ${name}`,error);
+    return null;
+  }
+}
+
+function savePrimaryStorage(reason='alteração'){
+  data=normalizeData(data);
+  const serialized=JSON.stringify(data);
+  localStorage.setItem(KEY,serialized);
+  localStorage.setItem('somnia_last_save_v1',JSON.stringify({
+    at:new Date().toISOString(),
+    reason,
+    counts:{
+      caffeine:data.caffeine.length,
+      sleep:data.sleep.length,
+      medications:data.medications.length,
+      medDoses:data.medDoses.length,
+      rhinitis:data.rhinitis.length
+    }
+  }));
+  lastSavedData=deepClone(data);
+  return true;
+}
+
+function refreshAppSafely(){
+  safeUiCall('renderAll',()=>renderAll());
+  safeUiCall('renderRecovery',()=>renderRecovery());
+  safeUiCall('renderTrash',()=>renderTrash());
+}
+
 async function persist(opts={}){
   const {reason='alteração',allowDeletion=false,skipSnapshot=false}=opts;
   data=normalizeData(data);
-  if(!storageReady){
-    localStorage.setItem(KEY,JSON.stringify(data));
-    lastSavedData=deepClone(data);
-    renderAll();
-    return;
-  }
+
   const drops=countDrop(lastSavedData,data);
   if(drops.length&&!allowDeletion){
     const msg=drops.map(x=>`${x.k}: ${x.b} → ${x.a}`).join('\n');
     data=deepClone(lastSavedData);
-    renderAll();
+    refreshAppSafely();
     alert('O Somnia bloqueou uma redução inesperada de registros para proteger seus dados.\n\n'+msg);
-    return;
+    return false;
   }
+
   try{
     if(!skipSnapshot)createSnapshot(lastSavedData,reason);
     maintainDailyBackup(lastSavedData);
-    await applyDiff('foods',lastSavedData.foods,data.foods);
-    await applyDiff('caffeine',lastSavedData.caffeine,data.caffeine);
-    await applyDiff('sleep',lastSavedData.sleep,data.sleep);
-    await applyDiff('trash',lastSavedData.trash,data.trash,'trashId');
-    await applyDiff('medications',lastSavedData.medications,data.medications);
-    await applyDiff('medDoses',lastSavedData.medDoses,data.medDoses);
-    await applyDiff('rhinitis',lastSavedData.rhinitis,data.rhinitis,'date');
-    if(JSON.stringify(lastSavedData.settings)!==JSON.stringify(data.settings)){
-      await idbPut('settings',{id:'main',value:data.settings});
-    }
-    lastSavedData=deepClone(data);
-    localStorage.setItem(KEY,JSON.stringify(data));
-    document.getElementById('storageStatus')&&(document.getElementById('storageStatus').textContent='Protegido');
-    renderAll();
-    renderRecovery();
-    renderTrash();
-  }catch(e){
-    console.error(e);
-    document.getElementById('storageStatus')&&(document.getElementById('storageStatus').textContent='Erro ao salvar');
-    alert('Não foi possível salvar com segurança. Seus dados anteriores foram preservados.');
-    throw e;
+  }catch(error){
+    console.warn('Backup auxiliar falhou',error);
   }
+
+  // Primeiro salva localmente. Depois tenta sincronizar com o banco protegido.
+  try{
+    savePrimaryStorage(reason);
+  }catch(error){
+    console.error('Falha no armazenamento local',error);
+    document.getElementById('storageStatus')&&(storageStatus.textContent='Erro ao salvar');
+    throw error;
+  }
+
+  let protectedOk=false;
+  if(storageReady&&db){
+    try{
+      await applyDiff('foods',lastSavedData.foods,data.foods);
+      await applyDiff('caffeine',lastSavedData.caffeine,data.caffeine);
+      await applyDiff('sleep',lastSavedData.sleep,data.sleep);
+      await applyDiff('trash',lastSavedData.trash,data.trash,'trashId');
+      await applyDiff('medications',lastSavedData.medications,data.medications);
+      await applyDiff('medDoses',lastSavedData.medDoses,data.medDoses);
+      await applyDiff('rhinitis',lastSavedData.rhinitis,data.rhinitis,'date');
+      await idbPut('settings',{id:'main',value:data.settings});
+      protectedOk=true;
+    }catch(error){
+      console.warn('IndexedDB indisponível; dados mantidos no armazenamento local',error);
+    }
+  }
+
+  document.getElementById('storageStatus')&&(
+    storageStatus.textContent=protectedOk?'Protegido':'Salvo localmente'
+  );
+  refreshAppSafely();
+  return true;
 }
-async function initStorage(){try{db=await openSomniaDB();const initialized=await idbGet('meta','initialized');let legacy=null;try{legacy=JSON.parse(localStorage.getItem(KEY)||'null')}catch{}if(!initialized){const source=normalizeData(legacy);createSnapshot(source,'antes da migração para armazenamento protegido');await replaceDB(source);await idbPut('meta',{id:'initialized',at:new Date().toISOString()});data=source}else{data=await loadFromDB();if(legacy){const l=normalizeData(legacy); // resgata registros legados que não estejam no banco protegido
- const ids=new Set(data.caffeine.map(x=>x.id));l.caffeine.forEach(x=>{if(!ids.has(x.id))data.caffeine.push(x)});const sids=new Set(data.sleep.map(x=>x.id));l.sleep.forEach(x=>{if(!sids.has(x.id))data.sleep.push(x)});const fids=new Set(data.foods.map(x=>x.id));l.foods.forEach(x=>{if(!fids.has(x.id))data.foods.push(x)});
-const mids=new Set(data.medications.map(x=>x.id));l.medications.forEach(x=>{if(!mids.has(x.id))data.medications.push(x)});
-const dids=new Set(data.medDoses.map(x=>x.id));l.medDoses.forEach(x=>{if(!dids.has(x.id))data.medDoses.push(x)});
-const rdates=new Set(data.rhinitis.map(x=>x.date));l.rhinitis.forEach(x=>{if(!rdates.has(x.date))data.rhinitis.push(x)});
-await replaceDB(data)}}storageReady=true;lastSavedData=deepClone(data);maintainDailyBackup(data);localStorage.setItem(KEY,JSON.stringify(data));renderAll();renderRecovery();renderTrash()}catch(e){console.error('Falha IndexedDB; usando modo compatibilidade',e);let legacy=null;try{legacy=JSON.parse(localStorage.getItem(KEY)||'null')}catch{}data=normalizeData(legacy);lastSavedData=deepClone(data);storageReady=false;renderAll();document.getElementById('storageStatus')&&(document.getElementById('storageStatus').textContent='Modo compatibilidade')}}
+async function initStorage(){
+  let local=null;
+  try{local=JSON.parse(localStorage.getItem(KEY)||'null')}catch(error){console.warn(error)}
+  data=normalizeData(local);
+  lastSavedData=deepClone(data);
+
+  try{
+    db=await openSomniaDB();
+    const protectedData=await loadFromDB();
+
+    // Merge protected records into the current local dataset without deleting local entries.
+    const mergeBy=(target,source,key)=>{
+      const existing=new Set(target.map(x=>String(x[key])));
+      source.forEach(x=>{if(!existing.has(String(x[key])))target.push(x);});
+    };
+    mergeBy(data.foods,protectedData.foods,'id');
+    mergeBy(data.caffeine,protectedData.caffeine,'id');
+    mergeBy(data.sleep,protectedData.sleep,'id');
+    mergeBy(data.trash,protectedData.trash,'trashId');
+    mergeBy(data.medications,protectedData.medications,'id');
+    mergeBy(data.medDoses,protectedData.medDoses,'id');
+    mergeBy(data.rhinitis,protectedData.rhinitis,'date');
+    data.settings={...protectedData.settings,...data.settings};
+
+    storageReady=true;
+    lastSavedData=deepClone(data);
+    savePrimaryStorage('inicialização');
+    await replaceDB(data);
+    document.getElementById('storageStatus')&&(storageStatus.textContent='Protegido');
+  }catch(error){
+    console.warn('IndexedDB indisponível; usando armazenamento local',error);
+    storageReady=false;
+    db=null;
+    savePrimaryStorage('modo local');
+    document.getElementById('storageStatus')&&(storageStatus.textContent='Salvo localmente');
+  }
+
+  maintainDailyBackup(data);
+  refreshAppSafely();
+}
 function localDateStr(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function todayStr(){return localDateStr(new Date())}
 function currentTimeStr(){return new Date().toTimeString().slice(0,5)}
@@ -858,21 +950,104 @@ function installSomniaNavigation(){
   if(active)activateSomniaPage(active.dataset.page,active);
 }
 
-document.addEventListener('DOMContentLoaded',installSomniaNavigation);
+
+function initializeSomniaForms(){
+  if(window.__somniaFormsInitialized)return;
+  window.__somniaFormsInitialized=true;
+  const nowDate=todayStr(),nowTime=currentTimeStr();
+  [['cafDate',nowDate],['cafTime',nowTime],['plannerDate',nowDate],['plannerTime',nowTime],['medDate',nowDate],['medTime',nowTime],['rhinitisDate',nowDate]].forEach(([id,value])=>{
+    const el=document.getElementById(id);if(el&&!el.value)el.value=value;
+  });
+  const pf=document.getElementById('plannerFood'),pa=document.getElementById('plannerAmount'),ms=document.getElementById('medSelect');
+  if(pf&&!pf.dataset.bound){pf.dataset.bound='1';pf.addEventListener('change',()=>updatePlannerFields(true));}
+  if(pa&&!pa.dataset.bound){pa.dataset.bound='1';pa.addEventListener('input',()=>updatePlannerFields(false));}
+  if(ms&&!ms.dataset.bound){ms.dataset.bound='1';ms.addEventListener('change',()=>{const med=data.medications?.find(x=>String(x.id)===String(ms.value));if(med){medDoseAmount.value=med.defaultDose??'';medDoseUnit.value=med.unit||'';}});}
+}
+
+document.addEventListener('DOMContentLoaded',()=>{initializeSomniaForms();installSomniaNavigation();});
 window.addEventListener('load',()=>setTimeout(installSomniaNavigation,100));
 
 function go(id,btn){activateSomniaPage(id,btn)}
 function parsePortionText(v){v=String(v||'').trim();let m=v.match(/^\s*([0-9]+(?:[.,][0-9]+)?)\s*(.*)$/);if(!m)return{amount:1,unit:v||'porção'};let amount=parseFloat(m[1].replace(',','.'));return{amount:Number.isFinite(amount)&&amount>0?amount:1,unit:(m[2]||'porção').trim()}}
 function caffeineDoseLabel(x){if(Number.isFinite(+x.consumedAmount)&&x.consumedUnit)return `${(+x.consumedAmount).toLocaleString('pt-BR')} ${x.consumedUnit}`;return `${x.qty} porção(ões)`}
 function syncCafPreview(resetAmount=false){let f=data.foods.find(x=>x.id===document.getElementById('cafItem').value);if(!f)return;let p=parsePortionText(f.portion);if(resetAmount||!document.getElementById('cafQty').value)document.getElementById('cafQty').value=p.amount;let amount=parseFloat(String(document.getElementById('cafQty').value).replace(',','.'))||0,factor=p.amount>0?amount/p.amount:amount;document.getElementById('cafUnitPreview').value=p.unit;document.getElementById('cafPortionPreview').value=`${p.amount.toLocaleString('pt-BR')} ${p.unit} = ${Number(f.mg).toLocaleString('pt-BR',{maximumFractionDigits:1})} mg`;document.getElementById('cafMgPreview').value=(f.mg*factor).toFixed(1)+' mg'}
-function addCaffeine(){let f=data.foods.find(x=>x.id===cafItem.value),amount=parseFloat(String(cafQty.value).replace(',','.'))||0;if(!f||amount<=0)return;let p=parsePortionText(f.portion),factor=p.amount>0?amount/p.amount:amount,d=(cafDate.value||todayStr())+'T'+(cafTime.value||currentTimeStr());data.caffeine.push({id:crypto.randomUUID(),foodId:f.id,name:f.name,qty:factor,consumedAmount:amount,consumedUnit:p.unit,baseAmount:p.amount,mg:f.mg*factor,ts:new Date(d).toISOString()});cafDate.value=todayStr();cafTime.value=currentTimeStr();
-plannerDate.value=todayStr();
-plannerTime.value=currentTimeStr();
-plannerFood.addEventListener('change',()=>updatePlannerFields(true));
-plannerAmount.addEventListener('input',()=>updatePlannerFields(false));
-syncCafPreview(true);persist({reason:'cafeína adicionada'});setTimeout(checkSmartReminder,250)}
+async function addCaffeine(){
+  const food=data.foods.find(x=>String(x.id)===String(cafItem.value));
+  const amount=parseFloat(String(cafQty.value).replace(',','.'))||0;
+  if(!food||amount<=0){showToast('Selecione a bebida e informe a quantidade');return;}
+
+  const portion=parsePortionText(food.portion);
+  const factor=portion.amount>0?amount/portion.amount:amount;
+  const date=cafDate.value||todayStr();
+  const time=cafTime.value||currentTimeStr();
+  const timestamp=new Date(`${date}T${time}`);
+
+  if(Number.isNaN(timestamp.getTime())){
+    showToast('Data ou horário inválido');
+    return;
+  }
+
+  const record={
+    id:crypto.randomUUID(),
+    foodId:food.id,
+    name:food.name,
+    qty:factor,
+    consumedAmount:amount,
+    consumedUnit:portion.unit,
+    baseAmount:portion.amount,
+    mg:Number(food.mg||0)*factor,
+    ts:timestamp.toISOString()
+  };
+
+  data.caffeine.push(record);
+  try{
+    await persist({reason:'cafeína adicionada'});
+    cafDate.value=todayStr();
+    cafTime.value=currentTimeStr();
+    syncCafPreview(true);
+    showToast('Ingestão adicionada');
+    setTimeout(checkSmartReminder,250);
+  }catch(error){
+    data.caffeine=data.caffeine.filter(x=>x.id!==record.id);
+    showToast('Não foi possível salvar a ingestão');
+  }
+}
 let toastTimer;function showToast(msg){const t=document.getElementById('appToast');if(!t)return;t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),1800)}
-function quickAdd(id,btn){let f=data.foods.find(x=>x.id===id);if(!f)return;const now=new Date();if(btn){btn.classList.remove('fav-hit');void btn.offsetWidth;btn.classList.add('fav-hit')}if(navigator.vibrate)navigator.vibrate(35);data.caffeine.push({id:crypto.randomUUID(),foodId:f.id,name:f.name,qty:1,mg:f.mg,ts:now.toISOString()});persist({reason:'cafeína favorita adicionada'});showToast(`✓ ${f.name}: ${f.mg} mg registrados às ${fmtTime(now)}`);setTimeout(()=>{renderAll();checkSmartReminder()},520)} function toggleFav(id){let f=data.foods.find(x=>x.id===id);if(f)f.favorite=!f.favorite;persist()}
+async function quickAdd(id,btn){
+  const food=data.foods.find(x=>String(x.id)===String(id));
+  if(!food)return;
+
+  const now=new Date();
+  if(btn){
+    btn.classList.remove('fav-hit');
+    void btn.offsetWidth;
+    btn.classList.add('fav-hit');
+  }
+  if(navigator.vibrate)navigator.vibrate(35);
+
+  const portion=parsePortionText(food.portion);
+  const record={
+    id:crypto.randomUUID(),
+    foodId:food.id,
+    name:food.name,
+    qty:1,
+    consumedAmount:portion.amount,
+    consumedUnit:portion.unit,
+    baseAmount:portion.amount,
+    mg:Number(food.mg||0),
+    ts:now.toISOString()
+  };
+
+  data.caffeine.push(record);
+  try{
+    await persist({reason:'cafeína favorita adicionada'});
+    showToast(`✓ ${food.name}: ${food.mg} mg registrados às ${fmtTime(now)}`);
+    setTimeout(checkSmartReminder,250);
+  }catch(error){
+    data.caffeine=data.caffeine.filter(x=>x.id!==record.id);
+    showToast('Erro ao registrar favorito');
+  }
+} function toggleFav(id){let f=data.foods.find(x=>x.id===id);if(f)f.favorite=!f.favorite;persist()}
 function addSleep(){validateSleepData();let s=new Date(sleepStart.value),e=new Date(sleepEnd.value),sc=Math.max(0,Math.min(100,parseInt(sleepScore.value||0)));if(!sleepStart.value||!sleepEnd.value||e<=s)return;let lat=sleepLatency.value===''?null:Math.max(0,parseInt(sleepLatency.value)||0),aw=sleepAwakenings.value===''?null:Math.max(0,parseInt(sleepAwakenings.value)||0),ws=sleepWakeScore.value===''?null:Math.max(0,Math.min(100,parseInt(sleepWakeScore.value)||0)),ds=sleepDeviceScore.value===''?null:Math.max(0,Math.min(100,parseInt(sleepDeviceScore.value)||0)),actual=sleepActualMin.value===''?null:Math.max(0,parseInt(sleepActualMin.value)||0),awake=sleepAwakeMin.value===''?null:Math.max(0,parseInt(sleepAwakeMin.value)||0),deep=sleepDeepMin.value===''?null:Math.max(0,parseInt(sleepDeepMin.value)||0),rem=sleepRemMin.value===''?null:Math.max(0,parseInt(sleepRemMin.value)||0),snore=sleepSnoreMin.value===''?null:Math.max(0,parseInt(sleepSnoreMin.value)||0);let factors={alcohol:fAlcohol.checked,lateExercise:fLateExercise.checked,heavyMeal:fHeavyMeal.checked,congestion:fCongestion.checked,lateScreen:fLateScreen.checked},stress=sleepStress.value===''?null:Math.max(0,Math.min(5,parseInt(sleepStress.value)||0)),exercise=exerciseMin.value===''?null:Math.max(0,parseInt(exerciseMin.value)||0);let rec={id:window.__editingSleepId||crypto.randomUUID(),type:sleepType.value,start:s.toISOString(),end:e.toISOString(),score:sc,deviceScore:ds,actualSleepMin:actual,awakeMin:awake,deepMin:deep,remMin:rem,latencyMin:lat,awakenings:aw,snoreMin:snore,wakeScore:ws,factors,stress,exerciseMin:exercise,note:sleepNote.value.trim()};if(window.__editingSleepId){let i=data.sleep.findIndex(z=>z.id===window.__editingSleepId);if(i>=0)data.sleep[i]=rec;else data.sleep.push(rec)}else data.sleep.push(rec);window.__editingSleepId=null;sleepNote.value='';sleepLatency.value='';sleepAwakenings.value='';sleepWakeScore.value='';sleepDeviceScore.value='';sleepActualMin.value='';sleepAwakeMin.value='';sleepDeepMin.value='';sleepRemMin.value='';sleepSnoreMin.value='';fAlcohol.checked=fLateExercise.checked=fHeavyMeal.checked=fCongestion.checked=fLateScreen.checked=false;sleepStress.value='';exerciseMin.value='';persist({reason:'sono adicionado'})}
 let editingFoodId=null;
 function addFood(){
@@ -918,11 +1093,114 @@ function purgeTrash(trashId){if(!confirm('Excluir definitivamente este item da l
 function renderTrash(){const el=document.getElementById('trashList');if(!el)return;const arr=[...data.trash].sort((a,b)=>new Date(b.deletedAt)-new Date(a.deletedAt));el.innerHTML=arr.length?arr.map(t=>{let label=t.type==='caffeine'?`${t.record.name||'Cafeína'} · ${Number(t.record.mg||0).toFixed(0)} mg`:t.type==='sleep'?`${t.record.type==='cochilo'?'Cochilo':'Sono'} · ${fmtDate(t.record.start)}`:`${t.record.name||'Bebida'}`;return `<div class="item"><div><strong>${label}</strong><small>Excluído em ${fmtDate(t.deletedAt)} ${fmtTime(t.deletedAt)}</small></div><div><button class="btn secondary" onclick="restoreTrash('${t.trashId}')">Restaurar</button> <button class="btn danger" onclick="purgeTrash('${t.trashId}')">Apagar</button></div></div>`}).join(''):'<div class="empty">Lixeira vazia.</div>'} function editCaf(id){let x=data.caffeine.find(v=>v.id===id);if(!x)return;let f=data.foods.find(v=>v.id===x.foodId),p=parsePortionText(f?.portion||`${x.baseAmount||1} ${x.consumedUnit||'porção'}`),current=Number.isFinite(+x.consumedAmount)?+x.consumedAmount:(+x.qty||1)*p.amount;let q=prompt(`Tamanho consumido (${p.unit}):`,current);if(q===null)return;q=parseFloat(String(q).replace(',','.'));let day=prompt('Data (AAAA-MM-DD):',new Date(x.ts).toISOString().slice(0,10));if(day===null)return;let hh=prompt('Horário (HH:MM):',fmtTime(x.ts));if(!q||!/^\d{4}-\d{2}-\d{2}$/.test(day)||!/^\d{2}:\d{2}$/.test(hh))return;let factor=q/p.amount,baseMg=f?f.mg:(x.mg/(x.qty||1));x.qty=factor;x.consumedAmount=q;x.consumedUnit=p.unit;x.baseAmount=p.amount;x.mg=baseMg*factor;x.ts=new Date(day+'T'+hh).toISOString();persist({reason:'cafeína editada'})}
 function saveSettings(){data.settings.halfLife=Math.max(2,Math.min(12,parseFloat(halfLife.value)||5));data.settings.bedtime=bedtime.value||'23:30';data.settings.wakeTime=wakeTime.value||'07:30';data.settings.weekdayMargin=Math.max(0,parseInt(weekdayMargin.value)||30);data.settings.weekendMargin=Math.max(data.settings.weekdayMargin,parseInt(weekendMargin.value)||90);data.settings.targetBedMg=Math.max(0,parseFloat(targetBedMg.value)||25);data.settings.sleepTargetHours=Math.max(4,Math.min(12,parseFloat(sleepTargetHours.value)||8));persist({reason:'configurações alteradas'})}
 
-async function quickAddMedication(medId){ensureMedicationData();const med=data.medications.find(m=>String(m.id)===String(medId));if(!med)return;const amount=Number(med.defaultDose);if(!Number.isFinite(amount)||amount<=0){showToast('Defina uma dose padrão para usar como favorito');return;}const rec={id:crypto.randomUUID(),medId:med.id,medName:med.name,amount,unit:med.unit||'',ts:new Date().toISOString(),note:'Favorito'};data.medDoses.push(rec);try{await persist({reason:'dose favorita registrada'});renderMedicationPage();showToast(`${med.name} registrado`)}catch(e){showToast('Erro ao registrar dose')}}
+async function quickAddMedication(medId){
+  ensureMedicationData();
+  const med=data.medications.find(m=>String(m.id)===String(medId));
+  if(!med)return;
+
+  const amount=Number(med.defaultDose);
+  if(!Number.isFinite(amount)||amount<=0){
+    showToast('Defina uma dose padrão para usar como favorito');
+    return;
+  }
+
+  const rec={
+    id:crypto.randomUUID(),
+    medId:med.id,
+    medName:med.name,
+    amount,
+    unit:med.unit||'',
+    ts:new Date().toISOString(),
+    note:'Favorito'
+  };
+
+  data.medDoses.push(rec);
+  try{
+    await persistMedicationCollections();
+    renderMedicationPage();
+    showToast(`${med.name} registrado`);
+    showUndo('Dose registrada',async()=>{
+      data.medDoses=data.medDoses.filter(x=>x.id!==rec.id);
+      await persistMedicationCollections();
+      renderMedicationPage();
+    });
+  }catch(error){
+    data.medDoses=data.medDoses.filter(x=>x.id!==rec.id);
+    saveMedicationMirror();
+    renderMedicationPage();
+    showToast('Erro ao registrar dose');
+  }
+}
 function reportDifference(a,b,unit=''){if(!Number.isFinite(a)||!Number.isFinite(b))return {text:'Dados insuficientes',cls:'neutral',value:'—'};const d=a-b;return {text:`${a.toFixed(1)} vs ${b.toFixed(1)}${unit}`,cls:Math.abs(d)<1?'neutral':d>0?'positive':'negative',value:`${d>0?'+':''}${d.toFixed(1)}${unit}`}}
 function renderMedicationPage(){if(!document.getElementById('medSelect'))return;ensureMedicationData();medSelect.innerHTML=data.medications.length?data.medications.map(m=>`<option value="${m.id}">${m.name}</option>`).join(''):'<option value="">Cadastre um medicamento abaixo</option>';const selected=data.medications.find(m=>m.id===medSelect.value)||data.medications[0];if(selected){medSelect.value=selected.id;medDoseAmount.value=selected.defaultDose??'';medDoseUnit.value=selected.unit||''}else{medDoseAmount.value='';medDoseUnit.value=''}medDoseList.innerHTML=data.medDoses.length?[...data.medDoses].sort((a,b)=>new Date(b.ts)-new Date(a.ts)).slice(0,30).map(d=>{const m=data.medications.find(x=>x.id===d.medId);return `<div class="item"><div><strong>${m?.name||d.medName||'Medicamento'}</strong><small>${new Date(d.ts).toLocaleString('pt-BR')} · ${d.amount} ${d.unit||''}${d.note?` · ${d.note}`:''}</small></div><div class="actions"><button class="btn secondary" onclick="editMedicationDose('${d.id}')">✎</button><button class="btn secondary" onclick="deleteMedicationDose('${d.id}')">×</button></div></div>`}).join(''):'<div class="empty">Nenhuma dose registrada.</div>';medCatalog.innerHTML=data.medications.length?data.medications.map(m=>`<div class="item"><div><strong>${m.name}</strong><small>${m.defaultDose??'—'} ${m.unit||''}${m.active?` · ${m.active}`:''}</small></div><div class="actions"><button class="btn secondary" onclick="editMedication('${m.id}')">✎</button><button class="btn secondary" onclick="deleteMedication('${m.id}')">×</button></div></div>`).join(''):'<div class="empty">Nenhum medicamento cadastrado.</div>';const favorites=data.medications.filter(m=>m.favorite);medFavoriteList.innerHTML=favorites.length?favorites.map(m=>`<button class="med-favorite-btn" onclick="quickAddMedication('${m.id}')"><strong>💊 ${m.name}</strong><small>${m.defaultDose??'—'} ${m.unit||''}${m.active?` · ${m.active}`:''}</small></button>`).join(''):'<div class="empty" style="grid-column:1/-1">Marque medicamentos como favoritos no cadastro.</div>';}
 
-async function saveMedication(){ensureMedicationData();const name=(medName.value||'').trim(),unit=(medUnit.value||'').trim(),doseRaw=medDefaultDose.value,dose=doseRaw===''?null:Number(doseRaw),active=(medActive.value||'').trim(),favorite=!!medFavorite.checked;if(!name){showToast('Digite o nome do medicamento');return;}const id=medEditId.value||crypto.randomUUID(),rec={id,name,unit,defaultDose:Number.isFinite(dose)?dose:null,active,favorite},i=data.medications.findIndex(x=>String(x.id)===String(id));if(i>=0)data.medications[i]=rec;else data.medications.push(rec);try{await persist({reason:'medicamento salvo'});localStorage.setItem('somnia_medications_v1',JSON.stringify({medications:data.medications,medDoses:data.medDoses,rhinitis:data.rhinitis}));medEditId.value='';medName.value='';medDefaultDose.value='';medUnit.value='';medActive.value='';medFavorite.checked=false;medFavorite.checked=false;renderMedicationPage();showToast('Medicamento salvo')}catch(e){showToast('Erro ao salvar medicamento')}}
+
+function saveMedicationMirror(){
+  ensureMedicationData();
+  const payload={
+    medications:data.medications,
+    medDoses:data.medDoses,
+    rhinitis:data.rhinitis,
+    savedAt:new Date().toISOString()
+  };
+  localStorage.setItem('somnia_medications_v2',JSON.stringify(payload));
+  localStorage.setItem('somnia_medications_v1',JSON.stringify(payload));
+  localStorage.setItem(KEY,JSON.stringify(normalizeData(data)));
+}
+
+async function ensureMedicationStores(){
+  if(!storageReady||!db)return false;
+  const required=['medications','medDoses','rhinitis'];
+  const missing=required.filter(name=>!db.objectStoreNames.contains(name));
+  if(!missing.length)return true;
+
+  try{db.close()}catch(e){}
+  db=null;
+  storageReady=false;
+
+  db=await openSomniaDB();
+  storageReady=true;
+  return required.every(name=>db.objectStoreNames.contains(name));
+}
+
+async function persistMedicationCollections(reason='medicamentos atualizados'){
+  ensureMedicationData();
+  saveMedicationMirror();
+  return await persist({reason});
+}
+
+async function saveMedication(){
+  ensureMedicationData();
+  const name=(medName.value||'').trim();
+  const unit=(medUnit.value||'').trim();
+  const rawDose=medDefaultDose.value;
+  const defaultDose=rawDose===''?null:Number(rawDose);
+  const active=(medActive.value||'').trim();
+  const favorite=!!medFavorite.checked;
+
+  if(!name){showToast('Digite o nome do medicamento');return;}
+
+  const id=medEditId.value||crypto.randomUUID();
+  const index=data.medications.findIndex(x=>String(x.id)===String(id));
+  const record={id,name,unit,defaultDose:Number.isFinite(defaultDose)?defaultDose:null,active,favorite};
+  if(index>=0)data.medications[index]=record;else data.medications.push(record);
+
+  try{
+    saveMedicationMirror();
+    await persist({reason:'medicamento salvo'});
+    medEditId.value='';
+    medName.value='';
+    medDefaultDose.value='';
+    medUnit.value='';
+    medActive.value='';
+    medFavorite.checked=false;
+    renderMedicationPage();
+    showToast('Medicamento salvo');
+  }catch(error){
+    console.error(error);
+    showToast('Não foi possível salvar o medicamento');
+  }
+}
 function editMedication(id){const m=data.medications.find(x=>x.id===id);if(!m)return;medEditId.value=m.id;medName.value=m.name;medDefaultDose.value=m.defaultDose??'';medUnit.value=m.unit||'';medActive.value=m.active||''}
 function cancelMedicationEdit(){medEditId.value='';medName.value='';medDefaultDose.value='';medUnit.value='';medActive.value=''}
 function deleteMedication(id){if(!confirm('Excluir este medicamento?'))return;data.medications=data.medications.filter(x=>x.id!==id);persist({reason:'medicamento excluído'});renderMedicationPage()}
@@ -931,23 +1209,41 @@ async function saveMedicationDose(){
   ensureMedicationData();
   const med=data.medications.find(x=>String(x.id)===String(medSelect.value));
   if(!med){showToast('Cadastre ou selecione um medicamento');return;}
+
   const amount=Number(medDoseAmount.value);
   if(!Number.isFinite(amount)||amount<=0){showToast('Informe uma dose válida');return;}
+
   const ts=new Date(`${medDate.value||todayStr()}T${medTime.value||currentTimeStr()}`);
   const id=window.__editingMedDoseId||crypto.randomUUID();
-  const rec={id,medId:med.id,medName:med.name,amount,unit:med.unit||'',ts:ts.toISOString(),note:(medDoseNote.value||'').trim()};
-  const i=data.medDoses.findIndex(x=>String(x.id)===String(id));
-  if(i>=0)data.medDoses[i]=rec;else data.medDoses.push(rec);
-  window.__editingMedDoseId=null;
+  const index=data.medDoses.findIndex(x=>String(x.id)===String(id));
+  const previous=index>=0?deepClone(data.medDoses[index]):null;
+  const record={
+    id,
+    medId:med.id,
+    medName:med.name,
+    amount,
+    unit:med.unit||'',
+    ts:ts.toISOString(),
+    note:(medDoseNote.value||'').trim()
+  };
+
+  if(index>=0)data.medDoses[index]=record;
+  else data.medDoses.push(record);
+
   try{
-    await persist({reason:'dose de medicamento registrada'});
-    localStorage.setItem('somnia_medications_v1',JSON.stringify({
-      medications:data.medications,medDoses:data.medDoses,rhinitis:data.rhinitis
-    }));
-    medDoseNote.value='';medDate.value=todayStr();medTime.value=currentTimeStr();
+    await persistMedicationCollections();
+    window.__editingMedDoseId=null;
+    medDoseNote.value='';
+    medDate.value=todayStr();
+    medTime.value=currentTimeStr();
     renderMedicationPage();
     showToast('Dose registrada');
-  }catch(e){
+  }catch(error){
+    console.error(error);
+    if(index>=0&&previous)data.medDoses[index]=previous;
+    else data.medDoses=data.medDoses.filter(x=>String(x.id)!==String(id));
+    saveMedicationMirror();
+    renderMedicationPage();
     showToast('Erro ao salvar dose');
   }
 }
@@ -956,23 +1252,28 @@ function deleteMedicationDose(id){if(!confirm('Excluir esta dose?'))return;data.
 async function saveRhinitis(){
   ensureMedicationData();
   const date=rhinitisDate.value||todayStr();
-  const rec={
+  const index=data.rhinitis.findIndex(x=>x.date===date);
+  const previous=index>=0?deepClone(data.rhinitis[index]):null;
+  const record={
     date,
     severity:Number(rhinitisSeverity.value||0),
     obstruction:Number(rhinitisObstruction.value||0),
     sneezing:Number(rhinitisSneezing.value||0),
     note:(rhinitisNote.value||'').trim()
   };
-  const i=data.rhinitis.findIndex(x=>x.date===date);
-  if(i>=0)data.rhinitis[i]=rec;else data.rhinitis.push(rec);
+
+  if(index>=0)data.rhinitis[index]=record;
+  else data.rhinitis.push(record);
+
   try{
-    await persist({reason:'rinite registrada'});
-    localStorage.setItem('somnia_medications_v1',JSON.stringify({
-      medications:data.medications,medDoses:data.medDoses,rhinitis:data.rhinitis
-    }));
+    await persistMedicationCollections();
     showToast('Sintomas salvos');
     renderMedicationAnalysis();
-  }catch(e){
+  }catch(error){
+    console.error(error);
+    if(index>=0&&previous)data.rhinitis[index]=previous;
+    else data.rhinitis=data.rhinitis.filter(x=>x.date!==date);
+    saveMedicationMirror();
     showToast('Erro ao salvar sintomas');
   }
 }
@@ -1077,11 +1378,54 @@ function renderCaffeineTargetCard(){
 }
 
 async function addPlannedCaffeine(){
-  const food=plannerFoodRecord();if(!food)return showToast('Selecione uma bebida cadastrada');
-  const ref=plannerReference(food),amount=Number(plannerAmount.value||0);if(!Number.isFinite(amount)||amount<=0)return showToast('Informe uma quantidade válida');
-  const mg=Number(food.mg||0)*(amount/ref.amount),ts=new Date(`${plannerDate.value||todayStr()}T${plannerTime.value||currentTimeStr()}`),rec={id:crypto.randomUUID(),itemId:food.id,name:food.name,mg,consumedAmount:amount,consumedUnit:ref.unit,portions:amount/ref.amount,ts:ts.toISOString()};
-  data.caffeine.push(rec);
-  try{await persist({reason:'cafeína adicionada pelo planejador'});renderCaffeineTargetCard();renderTargetCaffeineTime();showToast('Ingestão adicionada');showUndo('Cafeína adicionada',async()=>{data.caffeine=data.caffeine.filter(x=>x.id!==rec.id);await persist({reason:'desfazer cafeína planejada',allowDeletion:true})})}catch(e){showToast('Erro ao adicionar ingestão')}
+  const food=plannerFoodRecord();
+  if(!food){showToast('Selecione uma bebida cadastrada');return;}
+
+  const ref=plannerReference(food);
+  const amount=Number(plannerAmount.value||0);
+  if(!Number.isFinite(amount)||amount<=0){showToast('Informe uma quantidade válida');return;}
+
+  const date=plannerDate.value||todayStr();
+  const time=plannerTime.value||currentTimeStr();
+  const timestamp=new Date(`${date}T${time}`);
+  if(Number.isNaN(timestamp.getTime())){
+    plannerDate.value=todayStr();
+    plannerTime.value=currentTimeStr();
+    showToast('Data ou horário inválido');
+    return;
+  }
+
+  const mg=Number(food.mg||0)*(amount/ref.amount);
+  const record={
+    id:crypto.randomUUID(),
+    itemId:food.id,
+    foodId:food.id,
+    name:food.name,
+    mg,
+    consumedAmount:amount,
+    consumedUnit:ref.unit,
+    baseAmount:ref.amount,
+    portions:amount/ref.amount,
+    qty:amount/ref.amount,
+    ts:timestamp.toISOString()
+  };
+
+  data.caffeine.push(record);
+  try{
+    await persist({reason:'cafeína adicionada pelo planejador'});
+    renderCaffeineTargetCard();
+    renderTargetCaffeineTime();
+    runCaffeinePlanner();
+    showToast('Ingestão adicionada');
+    showUndo('Cafeína adicionada',async()=>{
+      data.caffeine=data.caffeine.filter(x=>x.id!==record.id);
+      await persist({reason:'desfazer cafeína planejada',allowDeletion:true});
+    });
+  }catch(error){
+    data.caffeine=data.caffeine.filter(x=>x.id!==record.id);
+    console.error(error);
+    showToast('Não foi possível salvar a ingestão');
+  }
 }
 
 function intelligenceCycleEntries(sleep){
@@ -1099,7 +1443,23 @@ function intelligenceDataset(){
   return (data.sleep||[]).filter(s=>s.type==='principal').map(s=>{const cyc=intelligenceCycleEntries(s),entries=cyc.entries,total=entries.reduce((a,c)=>a+Number(c.mg||0),0),auc=caffeineAUC(entries,cyc.start,new Date(s.start)),atBed=caffeineAtWithEntries(new Date(s.start),entries),meds=typeof medicationDosesBeforeSleep==='function'?medicationDosesBeforeSleep(s).map(d=>d.medName||data.medications.find(m=>m.id===d.medId)?.name||'Medicamento'):[],r=(data.rhinitis||[]).find(x=>x.date===sleepNightDate(s.start))||null;return{s,total,auc,atBed,meds,r,wake:Number.isFinite(+s.wakeScore)?+s.wakeScore:null,snore:Number.isFinite(+s.snoreMin)?+s.snoreMin:null,score:Number.isFinite(+s.score)?+s.score:null,duration:(new Date(s.end)-new Date(s.start))/36e5}})
 }
 function renderIntelligenceReport(){if(!document.getElementById('intelligenceSummary'))return;const ds=intelligenceDataset(),evidence=ds.length<5?'Poucos dados':ds.length<15?'Sinal inicial':ds.length<30?'Evidência moderada':'Padrão consistente';intelligenceEvidence.textContent=evidence;if(ds.length<5){intelligenceSummary.textContent=`Há ${ds.length} noites registradas. Registre pelo menos 5 noites para comparações iniciais.`;intelligenceCards.innerHTML='';bestPatternReport.innerHTML='Ainda não há dados suficientes.';caffeineLoadReport.innerHTML='Ainda não há dados suficientes.';return;}const withMed=ds.filter(n=>n.meds.length),withoutMed=ds.filter(n=>!n.meds.length),snoreKnown=ds.filter(n=>Number.isFinite(n.snore)),median=snoreKnown.length?[...snoreKnown].sort((a,b)=>a.snore-b.snore)[Math.floor(snoreKnown.length/2)].snore:null,highSnore=Number.isFinite(median)?snoreKnown.filter(n=>n.snore>=median):[],lowSnore=Number.isFinite(median)?snoreKnown.filter(n=>n.snore<median):[],highRh=ds.filter(n=>(n.r?.severity??0)>=5),lowRh=ds.filter(n=>(n.r?.severity??0)<5),lowBed=ds.filter(n=>n.atBed<25),highBed=ds.filter(n=>n.atBed>=25);intelligenceSummary.textContent=`Resumo de ${ds.length} noites. Use as diferenças abaixo como pistas pessoais, não como prova de causa e efeito.`;const med=reportDifference(avgVal(withMed,n=>n.wake??n.score),avgVal(withoutMed,n=>n.wake??n.score),' pts'),sn=reportDifference(avgVal(lowSnore,n=>n.wake??n.score),avgVal(highSnore,n=>n.wake??n.score),' pts'),rh=reportDifference(avgVal(lowRh,n=>n.wake??n.score),avgVal(highRh,n=>n.wake??n.score),' pts'),caf=reportDifference(avgVal(lowBed,n=>n.wake??n.score),avgVal(highBed,n=>n.wake??n.score),' pts');intelligenceCards.innerHTML=`<div class="intelligence-card"><strong>💊 Medicação</strong><div class="big-diff ${med.cls}">${med.value}</div><small>Com medicação versus sem: ${med.text}. n=${withMed.length}/${withoutMed.length}</small></div><div class="intelligence-card"><strong>😴 Ronco</strong><div class="big-diff ${sn.cls}">${sn.value}</div><small>Menos ronco versus mais ronco: ${sn.text}. n=${lowSnore.length}/${highSnore.length}</small></div><div class="intelligence-card"><strong>🤧 Rinite</strong><div class="big-diff ${rh.cls}">${rh.value}</div><small>Rinite leve versus intensa: ${rh.text}. n=${lowRh.length}/${highRh.length}</small></div><div class="intelligence-card"><strong>☕ Cafeína ao deitar</strong><div class="big-diff ${caf.cls}">${caf.value}</div><small>&lt;25 mg versus ≥25 mg: ${caf.text}. n=${lowBed.length}/${highBed.length}</small></div>`;const best=[...ds].filter(n=>Number.isFinite(n.wake??n.score)).sort((a,b)=>(b.wake??b.score)-(a.wake??a.score)),top=best.slice(0,Math.max(1,Math.ceil(best.length*.2))),rest=best.slice(top.length),rows=[],tb=avgVal(top,n=>n.atBed),rb=avgVal(rest,n=>n.atBed),ts=avgVal(top,n=>n.snore),rs=avgVal(rest,n=>n.snore),ta=avgVal(top,n=>n.auc),ra=avgVal(rest,n=>n.auc);if(Number.isFinite(tb)&&Number.isFinite(rb))rows.push(`<div class="visual-row"><strong>Cafeína ao deitar</strong><span>${tb.toFixed(0)} vs ${rb.toFixed(0)} mg</span></div>`);if(Number.isFinite(ts)&&Number.isFinite(rs))rows.push(`<div class="visual-row"><strong>Ronco</strong><span>${ts.toFixed(0)} vs ${rs.toFixed(0)} min</span></div>`);if(Number.isFinite(ta)&&Number.isFinite(ra))rows.push(`<div class="visual-row"><strong>Carga de cafeína</strong><span>${ta.toFixed(0)} vs ${ra.toFixed(0)} mg·h</span></div>`);bestPatternReport.innerHTML=rows.length?`<div class="visual-list">${rows.join('')}</div>`:'Ainda não há comparações suficientes.';const paired=ds.filter(n=>Number.isFinite(n.auc)&&Number.isFinite(n.wake??n.score)),r=paired.length>=3?pearson(paired.map(n=>n.auc),paired.map(n=>n.wake??n.score)):null,avgLoad=avgVal(ds,n=>n.auc),avgBed=avgVal(ds,n=>n.atBed),interp=!Number.isFinite(r)?'Ainda sem padrão claro.':r<=-.30?'Maior carga coincidiu com pior qualidade.':r>=.30?'Maior carga coincidiu com melhor qualidade, provavelmente por outros fatores.':'A associação atual é fraca.';caffeineLoadReport.innerHTML=`<div class="visual-list"><div class="visual-row"><strong>Carga média</strong><span>${fmtIntel(avgLoad,' mg·h')}</span></div><div class="visual-row"><strong>Cafeína ao deitar</strong><span>${fmtIntel(avgBed,' mg')}</span></div><div class="visual-row"><strong>Correlação</strong><span>${Number.isFinite(r)?r.toFixed(2):'—'}</span></div></div><div style="margin-top:10px">${interp}</div>`}
-function renderAll(){renderCaffeineTargetCard();renderIntelligenceReport();renderPlannerFoods();ensureMedicationData();renderTargetCaffeineTime();ensureMedicationData();renderMedicationPage();renderMedicationAnalysis();renderTodayDashboard();renderTodayOverview();renderPeriodComparison();renderBackupStatus();
+function renderAll(){
+  const tasks=[
+    ['renderCaffeineTargetCard',()=>renderCaffeineTargetCard()],
+    ['renderIntelligenceReport',()=>renderIntelligenceReport()],
+    ['renderPlannerFoods',()=>renderPlannerFoods()],
+    ['renderTargetCaffeineTime',()=>renderTargetCaffeineTime()],
+    ['renderMedicationPage',()=>{ensureMedicationData();renderMedicationPage()}],
+    ['renderMedicationAnalysis',()=>renderMedicationAnalysis()],
+    ['renderTodayDashboard',()=>renderTodayDashboard()],
+    ['renderTodayOverview',()=>renderTodayOverview()],
+    ['renderPeriodComparison',()=>renderPeriodComparison()],
+    ['renderBackupStatus',()=>renderBackupStatus()]
+  ];
+  tasks.forEach(([name,fn])=>safeUiCall(name,fn));
+
+  safeUiCall('main content',()=>{
+renderCaffeineTargetCard();renderIntelligenceReport();renderPlannerFoods();ensureMedicationData();renderTargetCaffeineTime();ensureMedicationData();renderMedicationPage();renderMedicationAnalysis();renderTodayDashboard();renderTodayOverview();renderPeriodComparison();renderBackupStatus();
  nowBadge.textContent=new Date().toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'short'});
  cafItem.innerHTML=data.foods.map(f=>`<option value="${f.id}">${f.name}</option>`).join(''); syncCafPreview(); halfLife.value=data.settings.halfLife;bedtime.value=data.settings.bedtime;wakeTime.value=data.settings.wakeTime||'07:30';weekdayMargin.value=data.settings.weekdayMargin??30;weekendMargin.value=data.settings.weekendMargin??90;targetBedMg.value=data.settings.targetBedMg;sleepTargetHours.value=data.settings.sleepTargetHours??8;halfLifeLabel.textContent=`Meia-vida: ${data.settings.halfLife} h`;bedtimeBadge.textContent=data.settings.bedtime;let bt=new Date(todayStr()+'T'+data.settings.bedtime);if(bt<new Date())bt.setDate(bt.getDate()+1);let pred=caffeineRemainingAt(bt);bedPrediction.innerHTML=`<strong>${pred.toFixed(0)} mg</strong> estimados às ${data.settings.bedtime}. ${pred<=data.settings.targetBedMg?'Dentro da sua meta configurada.':'Acima da meta de '+data.settings.targetBedMg+' mg; evite novas doses se quiser reduzir a cafeína ao deitar.'}`;favoriteList.innerHTML=data.foods.filter(f=>f.favorite).length?data.foods.filter(f=>f.favorite).map(f=>`<button class="btn secondary fav" onclick="quickAdd('${f.id}',this)"><strong>${f.name}</strong><small>${formatFavoritePortion(f)}</small></button>`).join(''):'<div class="empty" style="grid-column:1/-1">Marque itens com ★ na aba Mais.</div>';
  let today=data.caffeine.filter(x=>localDateStr(new Date(x.ts))===todayStr()); todayTotal.textContent=today.reduce((a,b)=>a+b.mg,0).toFixed(0)+' mg';currentCaf.textContent=caffeineRemainingAt(new Date()).toFixed(0)+' mg';
@@ -1107,6 +1467,8 @@ function renderAll(){renderCaffeineTargetCard();renderIntelligenceReport();rende
  foodList.innerHTML=data.foods.map(f=>`<div class="item"><div><strong>${f.name}</strong><small>${f.mg} mg · ${f.portion}</small></div><div class="actions"><button class="btn secondary" title="Favorito" onclick="toggleFav('${f.id}')">${f.favorite?'★':'☆'}</button><button class="btn edit" onclick="editFood('${f.id}')">✎ Editar</button><button class="btn danger" onclick="delFood('${f.id}')">Excluir</button></div></div>`).join('');
  let ss=[...data.sleep].sort((a,b)=>new Date(b.start)-new Date(a.start));sleepList.innerHTML=ss.length?ss.map(x=>{let h=(new Date(x.end)-new Date(x.start))/36e5,extra=[];if(x.latencyMin!=null)extra.push(`latência ${x.latencyMin} min`);if(x.awakenings!=null)extra.push(`${x.awakenings} despertar(es)`);if(x.wakeScore!=null)extra.push(`acordou ${x.wakeScore}/100`);return `<div class="item"><div><strong>${x.type==='cochilo'?'Cochilo':'Sono principal'} · ${h.toFixed(1)} h</strong><small>${fmtDate(x.start)} · ${fmtTime(x.start)}–${fmtTime(x.end)}${extra.length?' · '+extra.join(' · '):''}${x.note?' · '+x.note:''}</small></div><div><span class="pill">${x.score}/100</span> <button class="btn edit" onclick="editSleep('${x.id}')">✎</button> <button class="btn danger" onclick="delSleep('${x.id}')">×</button></div></div>`}).join(''):'<div class="empty">Nenhum sono registrado.</div>';
  renderHistory();renderCafChart();renderAnalysis();renderTodayDashboard();renderTodayOverview();renderReminderState();renderExperiments();
+
+  });
 }
 function renderCafChart(){let start=new Date();start.setHours(0,0,0,0);let labels=[],vals=[];for(let i=0;i<=96;i++){let t=new Date(start.getTime()+i*15*60e3);labels.push(t.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}));vals.push(caffeineRemainingAt(t))}let ctx=document.getElementById('cafChart');if(cafChart)cafChart.destroy();cafChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:'Cafeína estimada (mg)',data:vals,tension:.35,fill:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#dbeaff'}}},scales:{x:{ticks:{color:'#91a6bd',maxTicksLimit:8},grid:{color:'rgba(255,255,255,.05)'}},y:{beginAtZero:true,ticks:{color:'#91a6bd'},grid:{color:'rgba(255,255,255,.07)'}}}}})}
 let analysisPeriod=7;
@@ -1311,7 +1673,7 @@ function exportExcel(){
   const summaryRows=[[{v:'Noite de referência'},{v:'Cafeína antes deste sono (mg)'},{v:'Última cafeína'},{v:'Horas desde última cafeína'},{v:'Dormiu'},{v:'Sono principal (h)'},{v:'Nota pessoal'},{v:'Pontuação do monitor'},{v:'Cafeína estimada ao deitar (mg)'},{v:'Tempo real de sono (min)'},{v:'Eficiência (%)'},{v:'Sono profundo (min)'},{v:'Sono REM (min)'},{v:'Tempo acordado (min)'},{v:'Latência (min)'},{v:'Despertares'},{v:'Ronco (min)'},{v:'Como acordou (0-100)'}]];
   mainSleeps.forEach(x=>{let m=sleepMetrics(x),hrs=(new Date(x.end)-new Date(x.start))/36e5,gap=m.last?(new Date(x.start)-new Date(m.last.ts))/36e5:null;summaryRows.push([{v:new Date(sleepNightDate(x.start)+'T12:00').toLocaleDateString('pt-BR')},{v:Number(m.total.toFixed(2))},{v:m.last?fmtTime(m.last.ts):''},{v:gap===null?'':Number(gap.toFixed(2))},{v:fmtTime(x.start)},{v:Number(hrs.toFixed(2))},{v:x.score},{v:x.deviceScore??''},{v:Number(m.atBed.toFixed(2))},{v:x.actualSleepMin??''},{v:(x.actualSleepMin?Number((x.actualSleepMin/((new Date(x.end)-new Date(x.start))/60000)*100).toFixed(1)):'')},{v:x.deepMin??''},{v:x.remMin??''},{v:x.awakeMin??''},{v:x.latencyMin??''},{v:x.awakenings??''},{v:x.snoreMin??''},{v:x.wakeScore??''}])});
   const xml=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${excelSheet('Resumo diário',summaryRows)}${excelSheet('Cafeína',cafRows)}${excelSheet('Sono',sleepRows)}${excelSheet('Itens cadastrados',foodRows)}</Workbook>`;
-  const blob=new Blob([xml],{type:'application/vnd.ms-excel'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-4-1-2.xls';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
+  const blob=new Blob([xml],{type:'application/vnd.ms-excel'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-5-0.xls';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
 }
 function createManualSnapshot(){createSnapshot(data,'ponto manual');maintainDailyBackup(data);renderRecovery();showToast('✓ Ponto de recuperação criado')}
 function renderRecovery(){const el=document.getElementById('recoveryList');if(!el)return;const snaps=getSnapshots().slice(0,6);let daily={};try{daily=JSON.parse(localStorage.getItem(DAILY_KEY)||'{}')}catch{}const days=Object.entries(daily).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,4);const items=[];snaps.forEach(s=>items.push({kind:'snapshot',id:s.id,at:s.at,label:s.reason||'Ponto automático',data:s.data}));days.forEach(([d,s])=>items.push({kind:'daily',id:d,at:s.at,label:'Backup diário '+new Date(d+'T12:00').toLocaleDateString('pt-BR'),data:s.data}));el.innerHTML=items.length?items.map((x,i)=>`<div class="item"><div><strong>${x.label}</strong><small>${new Date(x.at).toLocaleString('pt-BR')} · ☕ ${(x.data.caffeine||[]).length} · 🌙 ${(x.data.sleep||[]).length}</small></div><button class="btn secondary" onclick="restoreRecovery('${x.kind}','${x.id}')">Restaurar</button></div>`).join(''):'<div class="empty">Nenhum ponto de recuperação ainda.</div>'}
@@ -1321,7 +1683,7 @@ Antes: ${data.caffeine.length} cafeína / ${data.sleep.length} sono
 Restaurado: ${(candidate.caffeine||[]).length} cafeína / ${(candidate.sleep||[]).length} sono
 
 O estado atual também será salvo como ponto de recuperação.`))return;createSnapshot(data,'antes de restaurar backup');data=normalizeData(candidate);await persist({reason:'backup restaurado',allowDeletion:true,skipSnapshot:true});showToast('✓ Dados restaurados')}
-function exportData(){let blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-4-1-2.json';a.click();URL.revokeObjectURL(a.href)}
+function exportData(){let blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='somnia-cafe-noite-v9-5-0.json';a.click();URL.revokeObjectURL(a.href)}
 function importData(ev){let f=ev.target.files[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{const incoming=normalizeData(JSON.parse(r.result));if(!confirm(`Importar este backup?\n\nAtual: ${data.caffeine.length} ingestões / ${data.sleep.length} sonos\nArquivo: ${incoming.caffeine.length} ingestões / ${incoming.sleep.length} sonos\n\nO estado atual será salvo para recuperação.`))return;createSnapshot(data,'antes de importar JSON');data=incoming;persist({reason:'JSON importado',allowDeletion:true,skipSnapshot:true})}catch(e){alert('Arquivo inválido')}};r.readAsText(f);ev.target.value=''}
 cafQty.addEventListener('input',()=>syncCafPreview(false));cafItem.addEventListener('change',()=>syncCafPreview(true));cafDate.value=todayStr();cafTime.value=currentTimeStr();expStart.value=todayStr();initStorage();setTimeout(renderTargetCaffeineTime,300);setInterval(()=>{renderTodayDashboard();checkSmartReminder()},60000);
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
